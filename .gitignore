@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.vite/
+*.local
+.env
+.env.*
+!.env.example
+.DS_Store
+Thumbs.db
+test-results/
+playwright-report/
+blob-report/
+.playwright/

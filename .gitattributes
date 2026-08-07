@@ -1,0 +1,6 @@
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ico binary
+package-lock.json -diff linguist-generated
+legacy/park-builder.html linguist-vendored
