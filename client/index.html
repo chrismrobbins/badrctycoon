@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en" class="scroll-smooth">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bad RC Tycoon</title>
+    <meta name="description" content="Build and manage your own theme park.">
+    <meta name="theme-color" content="#3b82f6">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>%F0%9F%8E%A2</text></svg>">
+
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;600;800&family=Space+Grotesk:wght@300;500;700&display=swap">
+    <!-- TODO(phase 4): self-host Font Awesome and the fonts; CDN is a third-party dependency on the critical path. -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+
+    <!-- Must stay inline and render-blocking: setting .dark after first paint causes a flash. -->
+    <script>
+        if (localStorage.getItem('color-theme') === 'dark' ||
+            (!('color-theme' in localStorage) && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
+            document.documentElement.classList.add('dark');
+        } else {
+            document.documentElement.classList.remove('dark');
+        }
+    </script>
+</head>
+<body class="antialiased bg-slate-50 text-slate-900 dark:bg-gray-950 dark:text-white h-screen flex flex-col overflow-hidden">
+    <!-- Top Stats Bar -->
+    <div class="w-full z-40 bg-white/50 dark:bg-black/50 backdrop-blur-md border-b border-black/5 dark:border-white/5 p-3 px-6 flex justify-between md:justify-center md:gap-8 lg:gap-12 items-center shrink-0 shadow-sm">
+        <div class="text-center">
+            <div class="text-[10px] font-bold uppercase tracking-widest text-slate-500 dark:text-gray-400">Funds</div>
+            <div class="text-lg font-bold text-green-600 dark:text-green-400" id="stat-funds">$10,000</div>
+        </div>
+        <div class="text-center">
+            <div class="text-[10px] font-bold uppercase tracking-widest text-slate-500 dark:text-gray-400">Status</div>
+            <div class="text-lg font-bold text-red-500" id="stat-status">CLOSED</div>
+        </div>
+        <div class="text-center hidden sm:block">
+            <div class="text-[10px] font-bold uppercase tracking-widest text-slate-500 dark:text-gray-400">Guests</div>
+            <div class="text-lg font-bold text-blue-500" id="stat-guests">0</div>
+        </div>
+        <div class="text-center hidden sm:block">
+            <div class="text-[10px] font-bold uppercase tracking-widest text-slate-500 dark:text-gray-400">Happiness</div>
+            <div class="text-lg font-bold text-pink-500" id="stat-happiness">50%</div>
+        </div>
+        <div class="text-center hidden lg:block" title="Park cleanliness — hire janitors to keep this up">
+            <div class="text-[10px] font-bold uppercase tracking-widest text-slate-500 dark:text-gray-400">Clean</div>
+            <div class="text-lg font-bold" id="stat-clean" style="color:#14b8a6">100%</div>
+        </div>
+        <div class="text-center">
+            <div class="text-[10px] font-bold uppercase tracking-widest text-slate-500 dark:text-gray-400">Rating</div>
+            <div class="text-lg font-bold text-yellow-500" id="stat-rating">0</div>
+        </div>
+        <div class="text-center hidden lg:block">
+            <div class="text-[10px] font-bold uppercase tracking-widest text-slate-500 dark:text-gray-400">Park Value</div>
+            <div class="text-lg font-bold text-emerald-500" id="stat-value">$10,000</div>
+        </div>
+        <div class="text-center hidden md:block">
+            <div class="text-[10px] font-bold uppercase tracking-widest text-slate-500 dark:text-gray-400">Day</div>
+            <div class="text-lg font-bold text-purple-500" id="stat-day">Day 1</div>
+        </div>
+        <div class="text-center">
+            <div class="text-[10px] font-bold uppercase tracking-widest text-slate-500 dark:text-gray-400"><i class="fas fa-clock text-[8px] mr-1"></i>Time</div>
+            <div class="text-lg font-bold text-orange-500 flex items-center justify-center gap-2"><span id="stat-time">6:00 AM</span><span id="stat-weather" class="text-sm"><i class="fas fa-sun text-yellow-500"></i></span></div>
+        </div>
+        <div class="hidden md:flex items-center gap-1 border-l border-slate-300 dark:border-gray-700 pl-4" title="Game speed">
+            <button id="speed-0" data-act="setSpeed" data-arg="0" class="w-8 h-8 rounded-lg text-xs font-bold text-slate-500 dark:text-gray-400 hover:bg-black/5 dark:hover:bg-white/10 transition"><i class="fas fa-pause"></i></button>
+            <button id="speed-1" data-act="setSpeed" data-arg="1" class="w-8 h-8 rounded-lg text-xs font-bold bg-blue-500/15 text-blue-500 transition"><i class="fas fa-play"></i></button>
+            <button id="speed-3" data-act="setSpeed" data-arg="3" class="w-8 h-8 rounded-lg text-xs font-bold text-slate-500 dark:text-gray-400 hover:bg-black/5 dark:hover:bg-white/10 transition"><i class="fas fa-forward"></i></button>
+        </div>
+        <div class="hidden md:flex items-center gap-1 border-l border-slate-300 dark:border-gray-700 pl-4">
+            <button data-act="openMgmt" data-arg="finance" class="h-8 px-3 rounded-lg text-[11px] font-bold text-slate-600 dark:text-gray-300 hover:bg-black/5 dark:hover:bg-white/10 transition" title="Management (M)"><i class="fas fa-briefcase mr-1"></i>Manage</button>
+            <button id="btn-minimap" data-act="toggleMinimap" class="w-8 h-8 rounded-lg text-xs text-slate-500 dark:text-gray-400 hover:bg-black/5 dark:hover:bg-white/10 transition" title="Minimap"><i class="fas fa-map"></i></button>
+            <button id="btn-sound" data-act="toggleSound" class="w-8 h-8 rounded-lg text-xs text-slate-500 dark:text-gray-400 hover:bg-black/5 dark:hover:bg-white/10 transition" title="Sound"><i class="fas fa-volume-mute"></i></button>
+            <button data-act="undoLast" class="w-8 h-8 rounded-lg text-xs text-slate-500 dark:text-gray-400 hover:bg-black/5 dark:hover:bg-white/10 transition" title="Undo (Ctrl+Z)"><i class="fas fa-rotate-left"></i></button>
+            <button id="btn-theme" data-act="toggleTheme" class="w-8 h-8 rounded-lg text-xs text-slate-500 dark:text-gray-400 hover:bg-black/5 dark:hover:bg-white/10 transition" title="Light / dark theme"><i id="theme-icon" class="fas fa-sun"></i></button>
+        </div>
+    </div>
+
+    <!-- Main Game Area -->
+    <main class="flex-grow relative flex w-full overflow-hidden">
+
+        <!-- Game Canvas -->
+        <canvas id="game-canvas"></canvas>
+        <div id="night-overlay"></div>
+
+        <!-- Build Palette Sidebar -->
+        <div class="absolute left-4 top-4 bottom-4 w-72 glass rounded-2xl flex flex-col shadow-xl z-10 overflow-hidden">
+            <div class="p-4 border-b border-black/5 dark:border-white/5 flex justify-between items-center bg-white/50 dark:bg-black/20 shrink-0">
+                <h2 class="font-bold text-sm uppercase tracking-widest">Build Palette</h2>
+                <button data-act="newGame" class="text-[10px] font-bold text-slate-400 hover:text-red-500 transition uppercase tracking-wider" title="Demolish everything and start over">New Game</button>
+            </div>
+
+            <div class="p-3 grid grid-cols-2 gap-2 overflow-y-auto custom-scroll flex-grow bg-white/10 dark:bg-black/10">
+
+                <!-- Path -->
+                <button class="build-btn glass rounded-xl p-3 flex flex-col items-center gap-2 hover:bg-white/50 dark:hover:bg-white/5 active" data-act="setTool" data-arg="path">
+                    <div class="w-10 h-10 rounded-full bg-slate-200 dark:bg-gray-800 flex items-center justify-center text-slate-600 dark:text-gray-300"><i class="fas fa-road"></i></div>
+                    <div class="text-center">
+                        <div class="text-xs font-bold">Path</div>
+                        <div class="text-[10px] text-green-600 dark:text-green-400">$10</div>
+                    </div>
+                </button>
+
+                <!-- Flower Bed -->
+                <button class="build-btn glass rounded-xl p-3 flex flex-col items-center gap-2 hover:bg-white/50 dark:hover:bg-white/5" data-act="setTool" data-arg="flowerbed">
+                    <div class="w-10 h-10 rounded-full bg-pink-50 dark:bg-pink-900/30 flex items-center justify-center text-pink-500"><i class="fas fa-leaf"></i></div>
+                    <div class="text-center">
+                        <div class="text-xs font-bold">Flowers</div>
+                        <div class="text-[10px] text-green-600 dark:text-green-400">$25</div>
+                    </div>
+                </button>
+
+                <!-- Trash Can -->
+                <button class="build-btn glass rounded-xl p-3 flex flex-col items-center gap-2 hover:bg-white/50 dark:hover:bg-white/5" data-act="setTool" data-arg="trashcan">
+                    <div class="w-10 h-10 rounded-full bg-slate-200 dark:bg-gray-800 flex items-center justify-center text-slate-600 dark:text-gray-300"><i class="fas fa-trash"></i></div>
+                    <div class="text-center">
+                        <div class="text-xs font-bold">Trash Can</div>
+                        <div class="text-[10px] text-green-600 dark:text-green-400">$30</div>
+                    </div>
+                </button>
+
+                <!-- Bench -->
+                <button class="build-btn glass rounded-xl p-3 flex flex-col items-center gap-2 hover:bg-white/50 dark:hover:bg-white/5" data-act="setTool" data-arg="bench">
+                    <div class="w-10 h-10 rounded-full bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center text-amber-700 dark:text-amber-400"><i class="fas fa-chair"></i></div>
+                    <div class="text-center">
+                        <div class="text-xs font-bold">Bench</div>
+                        <div class="text-[10px] text-green-600 dark:text-green-400">$45</div>
+                    </div>
+                </button>
+
+                <!-- Park Lamp -->
+                <button class="build-btn glass rounded-xl p-3 flex flex-col items-center gap-2 hover:bg-white/50 dark:hover:bg-white/5" data-act="setTool" data-arg="lamp">
+                    <div class="w-10 h-10 rounded-full bg-yellow-50 dark:bg-yellow-900/30 flex items-center justify-center text-yellow-500"><i class="fas fa-lightbulb"></i></div>
+                    <div class="text-center">
+                        <div class="text-xs font-bold">Park Lamp</div>
+                        <div class="text-[10px] text-green-600 dark:text-green-400">$40</div>
+                    </div>
+                </button>
+
+                <!-- Tree -->
+                <button class="build-btn glass rounded-xl p-3 flex flex-col items-center gap-2 hover:bg-white/50 dark:hover:bg-white/5" data-act="setTool" data-arg="tree">
+                    <div class="w-10 h-10 rounded-full bg-green-100 dark:bg-green-900/30 flex items-center justify-center text-green-600 dark:text-green-400"><i class="fas fa-tree"></i></div>
+                    <div class="text-center">
+                        <div class="text-xs font-bold">Tree Grove</div>
+                        <div class="text-[10px] text-green-600 dark:text-green-400">$50</div>
+                    </div>
+                </button>
+
+                <!-- Fountain -->
+                <button class="build-btn glass rounded-xl p-3 flex flex-col items-center gap-2 hover:bg-white/50 dark:hover:bg-white/5" data-act="setTool" data-arg="fountain">
+                    <div class="w-10 h-10 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center text-blue-600 dark:text-blue-400"><i class="fas fa-water"></i></div>
+                    <div class="text-center">
+                        <div class="text-xs font-bold">Fountain</div>
+                        <div class="text-[10px] text-green-600 dark:text-green-400">$150</div>
+                    </div>
+                </button>
+
+                <!-- Carousel -->
+                <button class="build-btn glass rounded-xl p-3 flex flex-col items-center gap-2 hover:bg-white/50 dark:hover:bg-white/5" data-act="setTool" data-arg="carousel">
+                    <div class="w-10 h-10 rounded-full bg-pink-100 dark:bg-pink-900/30 flex items-center justify-center text-pink-600 dark:text-pink-400"><i class="fas fa-horse-head"></i></div>
+                    <div class="text-center">
+                        <div class="text-xs font-bold">Carousel</div>
+                        <div class="text-[10px] text-green-600 dark:text-green-400">$800</div>
+                    </div>
+                </button>
+
+                <!-- Tea Cups -->
+                <button class="build-btn glass rounded-xl p-3 flex flex-col items-center gap-2 hover:bg-white/50 dark:hover:bg-white/5" data-act="setTool" data-arg="teacups">
+                    <div class="w-10 h-10 rounded-full bg-purple-100 dark:bg-purple-900/30 flex items-center justify-center text-purple-500"><i class="fas fa-coffee"></i></div>
+                    <div class="text-center">
+                        <div class="text-xs font-bold">Tea Cups</div>
+                        <div class="text-[10px] text-green-600 dark:text-green-400">$900</div>
+                    </div>
+                </button>
+
+                <!-- Bumper Cars -->
+                <button class="build-btn glass rounded-xl p-3 flex flex-col items-center gap-2 hover:bg-white/50 dark:hover:bg-white/5" data-act="setTool" data-arg="bumper">
+                    <div class="w-10 h-10 rounded-full bg-orange-100 dark:bg-orange-900/30 flex items-center justify-center text-orange-500"><i class="fas fa-car-crash"></i></div>
+                    <div class="text-center">
+                        <div class="text-xs font-bold">Bumper Cars</div>
+                        <div class="text-[10px] text-green-600 dark:text-green-400">$1,200</div>
+                    </div>
+                </button>
+
+                <!-- Drop Tower -->
+                <button class="build-btn glass rounded-xl p-3 flex flex-col items-center gap-2 hover:bg-white/50 dark:hover:bg-white/5" data-act="setTool" data-arg="droptower">
+                    <div class="w-10 h-10 rounded-full bg-yellow-100 dark:bg-yellow-900/30 flex items-center justify-center text-yellow-600 dark:text-yellow-400"><i class="fas fa-sort-amount-down"></i></div>
+                    <div class="text-center">
+                        <div class="text-xs font-bold">Drop Tower</div>
+                        <div class="text-[10px] text-green-600 dark:text-green-400">$1,500</div>
+                    </div>
+                </button>
+
+                <!-- Swinging Ship -->
+                <button class="build-btn glass rounded-xl p-3 flex flex-col items-center gap-2 hover:bg-white/50 dark:hover:bg-white/5" data-act="setTool" data-arg="ship">
+                    <div class="w-10 h-10 rounded-full bg-cyan-100 dark:bg-cyan-900/30 flex items-center justify-center text-cyan-600 dark:text-cyan-400"><i class="fas fa-ship"></i></div>
+                    <div class="text-center">
+                        <div class="text-xs font-bold">Swing Ship <span class="text-[9px] text-blue-400">(2×2)</span></div>
+                        <div class="text-[10px] text-green-600 dark:text-green-400">$1,800</div>
+                    </div>
+                </button>
+
+                <!-- Haunted House -->
+                <button class="build-btn glass rounded-xl p-3 flex flex-col items-center gap-2 hover:bg-white/50 dark:hover:bg-white/5" data-act="setTool" data-arg="haunted">
+                    <div class="w-10 h-10 rounded-full bg-slate-200 dark:bg-gray-800 flex items-center justify-center text-slate-700 dark:text-white"><i class="fas fa-ghost"></i></div>
+                    <div class="text-center">
+                        <div class="text-xs font-bold">Haunted House <span class="text-[9px] text-blue-400">(2×2)</span></div>
+                        <div class="text-[10px] text-green-600 dark:text-green-400">$2,000</div>
+                    </div>
+                </button>
+
+                <!-- Ferris Wheel -->
+                <button class="build-btn glass rounded-xl p-3 flex flex-col items-center gap-2 hover:bg-white/50 dark:hover:bg-white/5" data-act="setTool" data-arg="ferriswheel">
+                    <div class="w-10 h-10 rounded-full bg-purple-100 dark:bg-purple-900/30 flex items-center justify-center text-purple-600 dark:text-purple-400"><i class="fas fa-life-ring"></i></div>
+                    <div class="text-center">
+                        <div class="text-xs font-bold">Ferris Wheel <span class="text-[9px] text-blue-400">(2×2)</span></div>
+                        <div class="text-[10px] text-green-600 dark:text-green-400">$2,500</div>
+                    </div>
+                </button>
+
+                <!-- Rollercoaster -->
+                <button class="build-btn glass rounded-xl p-3 flex flex-col items-center gap-2 hover:bg-white/50 dark:hover:bg-white/5 col-span-2" data-act="setTool" data-arg="coaster">
+                    <div class="w-10 h-10 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center text-red-600 dark:text-red-400"><i class="fas fa-roller-coaster"></i></div>
+                    <div class="text-center">
+                        <div class="text-xs font-bold">Rollercoaster <span class="text-[9px] text-blue-400">(2×2)</span></div>
+                        <div class="text-[10px] text-green-600 dark:text-green-400">$4,000</div>
+                    </div>
+                </button>
+
+                <!-- Mega Coaster (4×4) -->
+                <button class="build-btn glass rounded-xl p-3 flex flex-col items-center gap-2 hover:bg-rose-50 dark:hover:bg-rose-900/10 col-span-2" data-act="setTool" data-arg="megacoaster">
+                    <div class="w-10 h-10 rounded-full bg-gradient-to-br from-rose-500 to-red-600 flex items-center justify-center text-white"><i class="fas fa-roller-coaster"></i></div>
+                    <div class="text-center">
+                        <div class="text-xs font-bold">Mega Coaster <span class="text-[9px] text-rose-400">(4×4)</span></div>
+                        <div class="text-[10px] text-green-600 dark:text-green-400">$12,000</div>
+                        <div class="text-[9px] text-slate-400 dark:text-gray-500">Vertical loop · 24 riders</div>
+                    </div>
+                </button>
+
+                <!-- Go-Karts -->
+                <button class="build-btn glass rounded-xl p-3 flex flex-col items-center gap-2 hover:bg-white/50 dark:hover:bg-white/5" data-act="setTool" data-arg="gokarts">
+                    <div class="w-10 h-10 rounded-full bg-slate-200 dark:bg-gray-800 flex items-center justify-center text-slate-700 dark:text-gray-200"><i class="fas fa-flag-checkered"></i></div>
+                    <div class="text-center">
+                        <div class="text-xs font-bold">Go-Karts <span class="text-[9px] text-blue-400">(2×2)</span></div>
+                        <div class="text-[10px] text-green-600 dark:text-green-400">$2,200</div>
+                    </div>
+                </button>
+
+                <!-- Shops divider -->
+                <div class="col-span-2 mt-2 text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-gray-600 px-1">Shops &amp; Services</div>
+
+                <!-- Food Stall -->
+                <button class="build-btn glass rounded-xl p-3 flex flex-col items-center gap-2 hover:bg-white/50 dark:hover:bg-white/5" data-act="setTool" data-arg="foodstall">
+                    <div class="w-10 h-10 rounded-full bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center text-amber-600 dark:text-amber-400"><i class="fas fa-burger"></i></div>
+                    <div class="text-center">
+                        <div class="text-xs font-bold">Food Stall</div>
+                        <div class="text-[10px] text-green-600 dark:text-green-400">$300</div>
+                    </div>
+                </button>
+
+                <!-- Drink Stall -->
+                <button class="build-btn glass rounded-xl p-3 flex flex-col items-center gap-2 hover:bg-white/50 dark:hover:bg-white/5" data-act="setTool" data-arg="drinkstall">
+                    <div class="w-10 h-10 rounded-full bg-sky-100 dark:bg-sky-900/30 flex items-center justify-center text-sky-600 dark:text-sky-400"><i class="fas fa-glass-water"></i></div>
+                    <div class="text-center">
+                        <div class="text-xs font-bold">Drink Stall</div>
+                        <div class="text-[10px] text-green-600 dark:text-green-400">$250</div>
+                    </div>
+                </button>
+
+                <!-- Restroom -->
+                <button class="build-btn glass rounded-xl p-3 flex flex-col items-center gap-2 hover:bg-white/50 dark:hover:bg-white/5" data-act="setTool" data-arg="restroom">
+                    <div class="w-10 h-10 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center text-blue-500"><i class="fas fa-restroom"></i></div>
+                    <div class="text-center">
+                        <div class="text-xs font-bold">Restroom</div>
+                        <div class="text-[10px] text-green-600 dark:text-green-400">$200</div>
+                    </div>
+                </button>
+
+                <!-- Balloon Stand -->
+                <button class="build-btn glass rounded-xl p-3 flex flex-col items-center gap-2 hover:bg-white/50 dark:hover:bg-white/5" data-act="setTool" data-arg="balloonstand">
+                    <div class="w-10 h-10 rounded-full bg-rose-100 dark:bg-rose-900/30 flex items-center justify-center text-rose-500"><i class="fas fa-certificate"></i></div>
+                    <div class="text-center">
+                        <div class="text-xs font-bold">Balloons</div>
+                        <div class="text-[10px] text-green-600 dark:text-green-400">$150</div>
+                    </div>
+                </button>
+
+                <!-- Buy Land -->
+                <button class="build-btn glass rounded-xl p-3 flex items-center justify-center gap-3 hover:bg-emerald-50 dark:hover:bg-emerald-900/10 col-span-2 mt-2" data-act="buyLand">
+                    <div class="w-8 h-8 rounded-full bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center text-emerald-600 dark:text-emerald-400"><i class="fas fa-expand-arrows-alt"></i></div>
+                    <div class="text-center flex items-center gap-2">
+                        <div class="text-xs font-bold">Buy Land (+4 tiles)</div>
+                        <div class="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold" id="land-cost">$5,000</div>
+                    </div>
+                </button>
+
+                <!-- Bulldozer -->
+                <button class="build-btn glass rounded-xl p-3 flex flex-col items-center gap-2 hover:bg-red-50 dark:hover:bg-red-900/10 col-span-2 mt-2" data-act="setTool" data-arg="bulldozer">
+                    <div class="w-8 h-8 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center text-red-600 dark:text-red-400"><i class="fas fa-snowplow"></i></div>
+                    <div class="text-center flex items-center gap-2">
+                        <div class="text-xs font-bold">Bulldozer</div>
+                        <div class="text-[10px] text-slate-500">(Cannot remove entrance)</div>
+                    </div>
+                </button>
+            </div>
+
+            <!-- Mini Event Log -->
+            <div class="h-32 border-t border-black/5 dark:border-white/5 bg-white/50 dark:bg-black/30 p-3 overflow-y-auto custom-scroll shrink-0" id="event-log">
+                <div class="text-[10px] text-slate-500 mb-1">System initialized...</div>
+                <div class="text-[10px] text-blue-500 font-bold">Welcome to Dynamics Park! Connect a path to the Main Entrance to open the park.</div>
+                <div class="text-[10px] text-slate-500 mb-1">Tip: scroll to zoom · right-drag (or Shift+drag) to pan · your park auto-saves.</div>
+            </div>
+        </div>
+
+        <!-- Minimap -->
+        <div id="minimap-wrap" class="side-panel glass hidden">
+            <div class="panel-head">
+                <span style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.15em;"><i class="fas fa-map" style="color:#3b82f6;margin-right:0.25rem;"></i>Park Map</span>
+                <span style="font-size:9px;color:#94a3b8;">click to jump</span>
+            </div>
+            <canvas id="minimap" width="232" height="150" style="display:block;cursor:crosshair;"></canvas>
+        </div>
+
+        <!-- Guest Inspector -->
+        <div id="guest-panel" class="side-panel glass hidden">
+            <div class="panel-head">
+                <div style="min-width:0;">
+                    <div id="guest-name" class="panel-title"></div>
+                    <div class="panel-sub">Park Guest</div>
+                </div>
+                <button class="panel-x" data-act="closeGuestPanel"><i class="fas fa-times"></i></button>
+            </div>
+            <div id="guest-stats" class="panel-body"></div>
+        </div>
+
+        <!-- Ride Inspector -->
+        <div id="ride-panel" class="side-panel glass hidden">
+            <div class="panel-head">
+                <div style="min-width:0;flex:1;">
+                    <input id="ride-name" maxlength="28" spellcheck="false">
+                    <div id="ride-type" class="panel-sub"></div>
+                </div>
+                <button class="panel-x" data-act="closeRidePanel"><i class="fas fa-times"></i></button>
+            </div>
+            <div id="ride-stats" class="panel-body"></div>
+            <div class="panel-foot">
+                <button class="m-btn blue" data-act="renameRandom"><i class="fas fa-dice" style="margin-right:0.25rem;"></i>Rename</button>
+                <button class="m-btn red" data-act="demolishInspected"><i class="fas fa-snowplow" style="margin-right:0.25rem;"></i>Demolish</button>
+            </div>
+        </div>
+
+        <!-- Objectives Panel -->
+        <div class="absolute right-4 top-4 w-64 glass rounded-2xl shadow-xl z-10 overflow-hidden hidden lg:block">
+            <button class="w-full p-3 border-b border-black/5 dark:border-white/5 flex justify-between items-center bg-white/50 dark:bg-black/20" data-act="toggleObjectives">
+                <h2 class="font-bold text-xs uppercase tracking-widest flex items-center gap-2"><i class="fas fa-bullseye text-blue-500"></i> Objectives</h2>
+                <i class="fas fa-chevron-down text-[10px] text-slate-400"></i>
+            </button>
+            <div id="objective-list" class="p-3 space-y-2 max-h-72 overflow-y-auto custom-scroll">
+                <!-- Injected by renderObjectives() -->
+            </div>
+        </div>
+
+    </main>
+
+    <!-- ═══ Park Management Modal (hand-rolled CSS — see note in <style>) ═══ -->
+    <div id="mgmt" class="hidden">
+        <div class="mgmt-backdrop" data-act="closeMgmt"></div>
+        <div class="mgmt-center">
+            <div class="mgmt-panel">
+                <div class="mgmt-head">
+                    <h2 class="mgmt-title"><i class="fas fa-briefcase" style="color:#3b82f6;margin-right:0.5rem;"></i>Park Management</h2>
+                    <button class="mgmt-close" data-act="closeMgmt"><i class="fas fa-times"></i></button>
+                </div>
+                <div class="mgmt-tabs">
+                    <button data-tab="finance"   data-act="openMgmt" data-arg="finance"   class="mgmt-tab"><i class="fas fa-chart-pie" style="margin-right:0.25rem;"></i>Finance</button>
+                    <button data-tab="staff"     data-act="openMgmt" data-arg="staff"     class="mgmt-tab"><i class="fas fa-user-group" style="margin-right:0.25rem;"></i>Staff</button>
+                    <button data-tab="marketing" data-act="openMgmt" data-arg="marketing" class="mgmt-tab"><i class="fas fa-bullhorn" style="margin-right:0.25rem;"></i>Marketing</button>
+                    <button data-tab="research"  data-act="openMgmt" data-arg="research"  class="mgmt-tab"><i class="fas fa-flask" style="margin-right:0.25rem;"></i>Research</button>
+                    <button data-tab="awards"    data-act="openMgmt" data-arg="awards"    class="mgmt-tab"><i class="fas fa-medal" style="margin-right:0.25rem;"></i>Awards</button>
+                </div>
+                <div id="mgmt-body" class="custom-scroll"></div>
+            </div>
+        </div>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+</body>
+</html>
