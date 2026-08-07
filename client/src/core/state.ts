@@ -17,7 +17,7 @@
 
 /** Bump on any shape change and add a migration. See migrations.ts -- the loader
  *  must never reject an old save, only upgrade it. */
-export const SAVE_VERSION = 7;
+export const SAVE_VERSION = 8;
 
 export interface Ledger {
   income: { admission: number; rides: number; shops: number; objectives: number; loans: number; refunds: number };
@@ -80,19 +80,16 @@ export interface GameState {
 
   // ── Money ──
   funds: number;
-  /** Sum of construction costs. Park value = funds + builtValue.
-   *  TODO(phase 4): derive from the map instead of accumulating -- see
-   *  ARCHITECTURE.md 3.5. The server cannot validate an accumulator. */
-  builtValue: number;
   loanBalance: number;
   admissionPrice: number;
   ledger: Ledger;
   dayLedger: Ledger;
 
   // ── Progress ──
-  /** TODO(phase 4): also an accumulator, and awards add to the same counter as
-   *  buildings, so it is not derivable from the map at all. */
-  rating: number;
+  // NOTE: `rating` and `builtValue` are deliberately absent. They are derived
+  // from the map by sim/park.ts -- parkRating(), builtValue(), parkValue().
+  // As stored accumulators they drifted whenever a code path forgot to adjust
+  // them, and the server had nothing to check a claimed value against.
   dayCount: number;
   /** Hours, 0-24. */
   gameTime: number;
@@ -160,13 +157,11 @@ export function createGameState(): GameState {
     landPurchased: 0,
 
     funds: STARTING_FUNDS,
-    builtValue: 0,
     loanBalance: 0,
     admissionPrice: 12,
     ledger: emptyLedger(),
     dayLedger: emptyLedger(),
 
-    rating: 0,
     dayCount: 1,
     gameTime: 6.0,
     objectiveIndex: 0,

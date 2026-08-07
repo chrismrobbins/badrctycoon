@@ -112,7 +112,7 @@ test('a v6 save gains the refunds bucket instead of breaking', async ({ page }) 
   await page.goto('/');
 
   const s = await page.evaluate(() => (window as any).__GAME__.state);
-  expect(s.version).toBe(7);
+  expect(s.version).toBe(8);
   expect(s.ledger.income.refunds).toBe(0);
   expect(s.dayLedger.income.refunds).toBe(0);
   expect(s.ledger.income.admission).toBe(1);

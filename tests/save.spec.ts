@@ -107,9 +107,11 @@ test('a legacy v5 save is migrated, not discarded', async ({ page }) => {
   await page.goto('/');
 
   const s = await state(page);
-  expect(s.version).toBe(7);
+  expect(s.version).toBe(8);
   expect(s.funds).toBe(4242);
-  expect(s.rating).toBe(137);
+  // `rating` is no longer stored -- it is recomputed as (map ratings + award
+  // ratings), so the legacy save's possibly-drifted 137 is discarded on purpose.
+  expect(s.rating).toBeUndefined();
   expect(s.dayCount).toBe(9);
   expect(s.admissionPrice).toBe(18);
   expect(s.loanBalance).toBe(3000);
@@ -129,6 +131,8 @@ test('a legacy v5 save is migrated, not discarded', async ({ page }) => {
 
   await expect(page.locator('#stat-funds')).toHaveText('$4,242');
   await expect(page.locator('#stat-day')).toHaveText('Day 9');
+  // Empty map + the one award in the save ('clean', 40) = 40, derived.
+  await expect(page.locator('#stat-rating')).toHaveText('40');
 });
 
 test('an unrecognised older save is recovered, not wiped', async ({ page }) => {
@@ -138,9 +142,10 @@ test('an unrecognised older save is recovered, not wiped', async ({ page }) => {
 
   const s = await state(page);
   expect(s.funds).toBe(777);
-  expect(s.rating).toBe(42);
-  expect(s.version).toBe(7);
+  expect(s.rating).toBeUndefined();   // derived, not stored
+  expect(s.version).toBe(8);
   await expect(page.locator('#stat-funds')).toHaveText('$777');
+  await expect(page.locator('#stat-rating')).toHaveText('0');   // empty map, no awards
 });
 
 test('a corrupt save falls back to a new park instead of throwing', async ({ page }) => {

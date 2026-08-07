@@ -2,6 +2,8 @@ import './styles/app.css';
 import { createGameState, emptyLedger, type RideQueue } from './core/state';
 import { SAVE_KEY, loadFromLocalStorage, saveToLocalStorage } from './save/schema';
 import * as Fin from './sim/finance';
+import { builtValue, parkRating, parkValue } from './sim/park';
+import { AWARDS } from './content/awards';
 // One source of truth for every buildable thing. These were nine hand-synced
 // tables in the monolith; they are all derived from content/ now.
 import {
@@ -540,15 +542,30 @@ function drawLitterAt(x, y, sx, sy) {
 }
 
 // ── Awards ──
-const AWARD_DEFS = [
-    { id: 'clean',   label: 'Cleanest Park in the Region', icon: 'fa-broom',      test: () => S.cleanliness >= 92 && S.guests >= 15, rating: 40 },
-    { id: 'value',   label: 'Best Value Park',             icon: 'fa-tags',       test: () => S.admissionPrice <= 10 && S.parkHappiness >= 70 && S.guests >= 20, rating: 45 },
-    { id: 'thrill',  label: 'Most Thrilling Park',         icon: 'fa-bolt',       test: () => totalExcitement() >= 400, rating: 60 },
-    { id: 'safe',    label: 'Safest Park',                 icon: 'fa-shield-halved', test: () => Object.values(S.rideQueues).length >= 4 && Object.values(S.rideQueues).every(q => (q.breakdowns || 0) === 0), rating: 55 },
-    { id: 'staffed', label: 'Best Staffed Park',           icon: 'fa-user-group', test: () => S.staff.length >= 4 && S.guests >= 25 && S.cleanliness >= 80, rating: 40 },
-    { id: 'beauty',  label: 'Most Beautiful Park',         icon: 'fa-seedling',   test: () => countType(['tree','flowerbed','fountain']) >= 20, rating: 50 },
-    { id: 'tycoon',  label: 'Tycoon of the Year',          icon: 'fa-crown',      test: () => S.funds + S.builtValue >= 100000, rating: 80 },
-];
+// Metadata (label, icon, rating) lives in content/awards.ts because parkRating()
+// and the server both need the rating as data. Only the predicates are here,
+// since they read live simulation state.
+const AWARD_TESTS: Record<string, () => boolean> = {
+    clean:   () => S.cleanliness >= 92 && S.guests >= 15,
+    value:   () => S.admissionPrice <= 10 && S.parkHappiness >= 70 && S.guests >= 20,
+    thrill:  () => totalExcitement() >= 400,
+    safe:    () => Object.values(S.rideQueues).length >= 4
+                   && Object.values(S.rideQueues).every(q => (q.breakdowns || 0) === 0),
+    staffed: () => S.staff.length >= 4 && S.guests >= 25 && S.cleanliness >= 80,
+    beauty:  () => countType(['tree', 'flowerbed', 'fountain']) >= 20,
+    tycoon:  () => parkValue(S) >= 100000,
+};
+
+const AWARD_DEFS = AWARDS.map((a) => ({ ...a, test: AWARD_TESTS[a.id] }));
+
+// An award with no predicate can never be won, and one with no metadata scores
+// zero rating. Fail at startup rather than either.
+{
+    const missing = AWARDS.filter((a) => !AWARD_TESTS[a.id]).map((a) => a.id);
+    const orphans = Object.keys(AWARD_TESTS).filter((id) => !AWARDS.some((a) => a.id === id));
+    if (missing.length) throw new Error(`[awards] no test for: ${missing.join(', ')}`);
+    if (orphans.length) throw new Error(`[awards] test with no definition: ${orphans.join(', ')}`);
+}
 
 function countType(types) {
     let n = 0;
@@ -575,7 +592,6 @@ function evaluateAwards() {
         try { passed = a.test(); } catch (e) { passed = false; }
         if (passed) {
             S.awardsWon.push({ id: a.id, day: S.dayCount });
-            S.rating += a.rating;
             logEvent(`🏆 AWARD: ${a.label}! (+${a.rating} rating)`, 'good');
             fireworksActive = true;
             fireworksTimer = Math.max(fireworksTimer, 6);
@@ -597,8 +613,6 @@ function undoLast() {
         // Remove what was built and refund the full cost
         for (const c of e.cells) { S.map[c.x][c.y] = null; delete S.anchorOf[`${c.x},${c.y}`]; }
         unspend(e.cost, 'construction');   // reverse the build; do not book it as income
-        S.builtValue = Math.max(0, S.builtValue - e.cost);
-        S.rating -= e.rating;
         delete S.rideQueues[e.key];
         delete S.rideNames[e.key];
         delete S.shopStats[e.key];
@@ -611,8 +625,6 @@ function undoLast() {
             if (e.cells.length > 1) S.anchorOf[`${c.x},${c.y}`] = { ax: e.cells[0].x, ay: e.cells[0].y };
         }
         unearn(e.refund, 'refunds');        // reverse the demolition refund
-        S.builtValue += e.cost;
-        S.rating += e.rating;
         if (RIDE_TYPES.has(e.type)) {
             S.rideQueues[e.key] = { queue: 0, ridersOnBoard: 0, cycleTimer: 0, broken: false, repairTimer: 0, riders: 0, earned: 0, breakdowns: 0 };
         }
@@ -735,7 +747,7 @@ function renderMgmt() {
         const profit = dInc - dExp;
         h += `<div class="m-grid3">
             <div class="m-tile" style="background:rgba(34,197,94,0.1)"><div class="k" style="color:${C.green}">Cash</div><div class="v">${money(S.funds)}</div></div>
-            <div class="m-tile" style="background:rgba(59,130,246,0.1)"><div class="k" style="color:${C.blue}">Park Value</div><div class="v">${money(S.funds + S.builtValue)}</div></div>
+            <div class="m-tile" style="background:rgba(59,130,246,0.1)"><div class="k" style="color:${C.blue}">Park Value</div><div class="v">${money(parkValue(S))}</div></div>
             <div class="m-tile" style="background:${profit >= 0 ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)'}"><div class="k" style="color:${profit >= 0 ? C.green : C.red}">Today's Profit</div><div class="v">${money(profit)}</div></div>
         </div>`;
         h += `<div class="m-grid2">
@@ -823,7 +835,7 @@ function renderMgmt() {
         }
         h += `<div class="m-block">
             ${row('Current attendance', `${S.guests} guests`)}
-            ${row('Park rating', S.rating)}
+            ${row('Park rating', parkRating(S))}
             ${row('Average happiness', `${Math.round(S.parkHappiness)}%`)}
         </div>`;
     }
@@ -871,7 +883,7 @@ function renderMgmt() {
     el.innerHTML = h;
 }
 
-function perceivedValue() { return Math.max(2, Math.round(S.rating / 22 + S.parkHappiness / 12 + Object.keys(S.rideQueues).length * 0.8)); }
+function perceivedValue() { return Math.max(2, Math.round(parkRating(S) / 22 + S.parkHappiness / 12 + Object.keys(S.rideQueues).length * 0.8)); }
 function setAdmission(v) {
     S.admissionPrice = parseInt(v, 10);
     const lbl = document.getElementById('price-label');
@@ -1096,10 +1108,10 @@ const OBJECTIVES = [
     { text: 'Connect a path to the entrance', reward: 250,  check: () => S.isParkOpen },
     { text: 'Build your first ride',          reward: 500,  check: () => Object.keys(S.rideQueues).length > 0 },
     { text: 'Reach 20 guests',                reward: 750,  check: () => S.guests >= 20 },
-    { text: 'Reach a park rating of 500',     reward: 1000, check: () => S.rating >= 500 },
+    { text: 'Reach a park rating of 500',     reward: 1000, check: () => parkRating(S) >= 500 },
     { text: 'Sell 25 items at your shops',    reward: 1000, check: () => S.shopSales >= 25 },
     { text: '75% happiness with 30+ guests',  reward: 1500, check: () => S.parkHappiness >= 75 && S.guests >= 30 },
-    { text: 'Reach $30,000 park value',       reward: 2500, check: () => S.funds + S.builtValue >= 30000 },
+    { text: 'Reach $30,000 park value',       reward: 2500, check: () => parkValue(S) >= 30000 },
     { text: 'Host 100 guests at once',        reward: 5000, check: () => S.guests >= 100 },
 ];
 
@@ -1316,7 +1328,7 @@ function formatTime(h) {
 function updateUI() {
     document.getElementById('stat-funds').innerText = `$${S.funds.toLocaleString()}`;
     document.getElementById('stat-guests').innerText = String(S.guests);
-    document.getElementById('stat-rating').innerText = String(S.rating);
+    document.getElementById('stat-rating').innerText = String(parkRating(S));
     document.getElementById('stat-happiness').innerText = `${Math.round(S.parkHappiness)}%`;
     document.getElementById('stat-time').innerText = formatTime(S.gameTime);
     const dayEl = document.getElementById('stat-day');
@@ -1327,7 +1339,7 @@ function updateUI() {
         clnEl.style.color = S.cleanliness > 80 ? '#14b8a6' : S.cleanliness > 50 ? '#f59e0b' : '#ef4444';
     }
     const valEl = document.getElementById('stat-value');
-    if (valEl) valEl.innerText = `$${(S.funds + S.builtValue).toLocaleString()}`;
+    if (valEl) valEl.innerText = `$${parkValue(S).toLocaleString()}`;
     const wEl = document.getElementById('stat-weather');
     if (wEl) wEl.innerHTML = S.weather === 'clear'
         ? '<i class="fas fa-sun text-yellow-500"></i>'
@@ -1773,7 +1785,7 @@ function economyTick() {
             : Math.max(0.08, 1 - (S.admissionPrice - pv) * 0.14);
         const campaignMultiplier = S.marketing.key ? 1 + MARKETING_CAMPAIGNS[S.marketing.key].boost : 1;
         const cleanMultiplier = 0.7 + (S.cleanliness / 100) * 0.3;
-        let targetGuests = Math.floor((S.rating / 3) * happinessMultiplier * nightMultiplier
+        let targetGuests = Math.floor((parkRating(S) / 3) * happinessMultiplier * nightMultiplier
                                       * weatherMultiplier * priceMultiplier * campaignMultiplier * cleanMultiplier);
 
         if (S.guests < targetGuests) {
@@ -4315,8 +4327,6 @@ function buildInCell(x, y) {
             // Refund & clear all tiles
             const refund = Math.floor(data.cost * 0.5);
             earn(refund, 'refunds');
-            S.rating -= data.rating;
-            S.builtValue = Math.max(0, S.builtValue - data.cost);
 
             const sz = data.size;
             const cleared = [];
@@ -4328,7 +4338,7 @@ function buildInCell(x, y) {
                 }
             }
             pushUndo({ kind: 'demolish', type, cells: cleared, cost: data.cost, refund,
-                       rating: data.rating, key: `${ax},${ay}`, name: S.rideNames[`${ax},${ay}`] });
+                       key: `${ax},${ay}`, name: S.rideNames[`${ax},${ay}`] });
             sfx('demolish');
             const dKey = `${ax},${ay}`;
             logEvent(`Demolished "${S.rideNames[dKey] || type}". Refund: $${refund}`, 'info');
@@ -4339,13 +4349,9 @@ function buildInCell(x, y) {
         } else {
             // Simple single-tile without anchor (path, etc.)
             if (currentCell === 'path') {
-                S.rating -= BUILD_DATA['path'].rating;
-                S.builtValue = Math.max(0, S.builtValue - BUILD_DATA['path'].cost);
             } else if (BUILD_DATA[currentCell]) {
                 const refund = Math.floor(BUILD_DATA[currentCell].cost * 0.5);
                 earn(refund, 'refunds');
-                S.rating -= BUILD_DATA[currentCell].rating;
-                S.builtValue = Math.max(0, S.builtValue - BUILD_DATA[currentCell].cost);
             }
             const sKey = `${x},${y}`;
             delete S.rideNames[sKey];
@@ -4384,8 +4390,6 @@ function buildInCell(x, y) {
 
     // Place it
     spend(toolData.cost, 'construction');
-    S.rating += toolData.rating;
-    S.builtValue += toolData.cost;
 
     const placed = [];
     for (let dx = 0; dx < sz; dx++) {
@@ -4396,7 +4400,7 @@ function buildInCell(x, y) {
         }
     }
     pushUndo({ kind: 'build', type: currentTool, cells: placed, cost: toolData.cost,
-               rating: toolData.rating, key: `${x},${y}` });
+               key: `${x},${y}` });
     sfx('build');
 
     // Initialize ride queue + give it a name

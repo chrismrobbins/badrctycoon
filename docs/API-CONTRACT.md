@@ -31,6 +31,8 @@ Node with no DOM and fails if anyone breaks that, so it is safe to depend on:
 client/src/core/state.ts        // GameState, SAVE_VERSION, STARTING_FUNDS, emptyLedger
 client/src/content/             // BUILD_DATA, RIDE_TYPES, costs, ratings, footprints
 client/src/sim/finance.ts       // expectedFunds(), ledgerReconciles()
+client/src/sim/park.ts          // builtValue(), parkValue(), parkRating()
+client/src/content/awards.ts    // award ids and their rating values
 client/src/save/migrations.ts   // migrate()
 ```
 
@@ -181,22 +183,26 @@ Run these on PUT, in order, before touching the database:
 | 4 | `gridSize` ∈ {15, 19, 23, 27, 31, 35}; `map` dimensions match `gridSize` | `400` |
 | 5 | Every non-null map cell is a known id (`BUILD_DATA`) or `'entrance'` | `400` |
 | 6 | `ledgerReconciles(state)` — `funds === 10000 + Σincome − Σexpense` | `422 books_do_not_balance` |
-| 7 | `parkValue === funds + Σ(cost of each placed attraction)`, counting multi-tile structures once via `anchorOf` | `422` |
+| 7 | `parkValue === parkValue(state)` from `sim/park.ts` | `422` |
 | 8 | `day >= stored.day` (monotonic per slot) | `422 time_travel` |
 | 9 | `playtimeMs >= stored.playtimeMs`, and `day` plausible against it | `422` |
-| 10 | `rating <= Σ(ratings from map) + Σ(ratings of awards won)` — **upper bound only**, see below | `422` |
+| 10 | `rating === parkRating(state)` from `sim/park.ts` | `422` |
 | 11 | `parkName` and every value in `state.rideNames` ≤ 48 / 28 chars, control characters stripped | `400` |
 
 Checks 6 and 7 are the load-bearing ones: together they mean funds and park value
 have to be *consistent with the park you built*, not merely asserted.
 
-`tests/portability.spec.ts` shows checks 6 and 7 implemented against the real
-modules — start from there.
+`tests/portability.spec.ts` exercises checks 6, 7 and 10 against the real modules,
+including the multi-tile and gate cases — start from there.
 
-**On check 10:** `rating` is still an accumulator in the client, and awards add to
-the same counter that buildings do, so it is not exactly derivable from the map
-yet (ARCHITECTURE §3.5). Treat it as an upper bound until that is fixed, and do
-not reject on a small shortfall.
+**On checks 7 and 10:** as of save v8, `rating` and `builtValue` are no longer
+stored at all. They are computed from the map by `sim/park.ts` — import
+`parkValue()` and `parkRating()` and compare against the `SlotMeta` the client
+sent. Exact equality, no tolerance needed. `sim/park.ts` already folds multi-tile
+structures back to their anchor so a 2×2 ride counts once, and skips the gate.
+
+An earlier version of this document said check 10 could only be an upper bound,
+because `rating` was an accumulator that awards also wrote to. That is fixed.
 
 **Ride names are user input.** They are safe in the client today — every render
 path uses `textContent`, `.value` or canvas — but a leaderboard puts *another

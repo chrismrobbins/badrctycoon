@@ -4,6 +4,7 @@ import { createGameState, emptyLedger, SAVE_VERSION, STARTING_FUNDS } from '../c
 import { migrate } from '../client/src/save/migrations';
 import { earn, spend, unearn, unspend, expectedFunds, ledgerReconciles } from '../client/src/sim/finance';
 import { BUILD_DATA, RIDE_TYPES } from '../client/src/content';
+import { builtValue, mapRating, parkRating, parkValue } from '../client/src/sim/park';
 
 /**
  * These modules must stay importable outside a browser.
@@ -53,8 +54,9 @@ test('the ledger invariant is computable server-side', () => {
   expect(ledgerReconciles(s)).toBe(false);
 });
 
-test('park value is recomputable from the map alone', () => {
-  // This is the check that makes builtValue verifiable instead of asserted.
+test('park value and rating are recomputable from the map alone', () => {
+  // This is what makes checks 7 and 10 in API-CONTRACT.md possible: the server
+  // calls these exact functions and rejects a save whose numbers disagree.
   const s = createGameState();
   s.gridSize = 4;
   s.map = [
@@ -64,21 +66,52 @@ test('park value is recomputable from the map alone', () => {
     [null, null, null, null],
   ];
 
-  let value = 0;
-  const counted = new Set<string>();
-  for (let x = 0; x < s.gridSize; x++) {
-    for (let y = 0; y < s.gridSize; y++) {
-      const cell = s.map[x][y];
-      if (!cell || cell === 'entrance') continue;
-      const a = s.anchorOf[`${x},${y}`];
-      const key = a ? `${a.ax},${a.ay}` : `${x},${y}`;
-      if (counted.has(key)) continue;
-      counted.add(key);
-      value += BUILD_DATA[cell]?.cost ?? 0;
-    }
+  expect(builtValue(s)).toBe(50 + 10 + 10 + 800);       // tree + 2 paths + carousel
+  expect(parkValue(s)).toBe(STARTING_FUNDS + builtValue(s));
+  expect(mapRating(s)).toBe(5 + 1 + 1 + 50);
+  expect(parkRating(s)).toBe(mapRating(s));             // no awards yet
+
+  // Awards add on top, from content/awards.ts rather than a stored counter.
+  s.awardsWon = [{ id: 'clean', day: 3 }, { id: 'tycoon', day: 9 }];
+  expect(parkRating(s)).toBe(mapRating(s) + 40 + 80);
+
+  // A save naming an award we no longer ship scores zero instead of throwing.
+  s.awardsWon = [{ id: 'no-such-award', day: 1 }];
+  expect(parkRating(s)).toBe(mapRating(s));
+});
+
+test('a multi-tile ride counts once, not once per cell', () => {
+  // The bug this guards: a 2x2 ferris wheel occupies four cells. Summing per
+  // cell would value it at 4x cost and inflate both park value and rating --
+  // and the server would then reject an honest client.
+  const s = createGameState();
+  s.gridSize = 3;
+  s.map = [
+    ['ferriswheel', 'ferriswheel', null],
+    ['ferriswheel', 'ferriswheel', null],
+    [null, null, null],
+  ];
+  for (const [x, y] of [[0, 0], [0, 1], [1, 0], [1, 1]]) {
+    s.anchorOf[`${x},${y}`] = { ax: 0, ay: 0 };
   }
 
-  expect(value).toBe(50 + 10 + 10 + 800); // tree + 2 paths + carousel
+  expect(builtValue(s)).toBe(BUILD_DATA.ferriswheel.cost);
+  expect(mapRating(s)).toBe(BUILD_DATA.ferriswheel.rating);
+});
+
+test('the park gate is not counted as an attraction', () => {
+  const s = createGameState();
+  s.gridSize = 2;
+  s.map = [['entrance', 'entrance'], [null, null]];
+  expect(builtValue(s)).toBe(0);
+  expect(mapRating(s)).toBe(0);
+});
+
+test('rating and builtValue are absent from a fresh state', () => {
+  // They are derived; storing them is what let them drift.
+  const s = createGameState() as unknown as Record<string, unknown>;
+  expect('rating' in s).toBe(false);
+  expect('builtValue' in s).toBe(false);
 });
 
 test('migrations run server-side, for backfills and validation', () => {

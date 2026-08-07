@@ -138,12 +138,18 @@ when `cells.length > 1`). Those two branches refund differently — the live one
 a path ($5), the dead one refunds paths not at all. Undo a demolish, then bulldoze, and you
 get a different outcome than bulldozing directly.
 
-### 3.5 Derived values tracked as accumulators
+### 3.5 Derived values tracked as accumulators — FIXED (save v8)
 
-`rating` and `builtValue` are `+=`/`-=` counters, not functions of the map. `rating` also
-absorbs award bonuses, so it is *not* derivable from the park at all. Any missed code path
-drifts them permanently — and the server cannot recompute or validate a claimed rating.
-Relevant to the trust model (§5).
+`rating` and `builtValue` were `+=`/`-=` counters, not functions of the map, and `rating`
+also absorbed award bonuses — so it was not derivable from the park at all. Any missed code
+path drifted them permanently, and the server had nothing to check a claimed rating against.
+
+Both are gone from `GameState` as of save v8. `sim/park.ts` computes them from the map
+(`builtValue()`, `parkValue()`, `parkRating()`), award rating values moved to
+`content/awards.ts` as data, and the v8 migration drops the stored figures rather than
+trusting them — they had already drifted in any park where something was demolished.
+
+This is what upgraded API-CONTRACT checks 7 and 10 from "upper bound" to exact equality.
 
 ### 3.6 Save bloat and leaks
 
@@ -495,8 +501,9 @@ inside `main.ts`. What is left:
 - Add the ESLint `no-restricted-imports` / `no-restricted-globals` boundary rule on `sim/`.
   Until that exists, nothing stops the simulation reaching for the DOM again;
   `tests/portability.spec.ts` is the interim guard for the modules the server needs.
-- Make `rating` and `builtValue` derived rather than accumulated (§3.5). This is what would
-  turn API-CONTRACT check 10 from an upper bound into an equality.
+- ~~Make `rating` and `builtValue` derived rather than accumulated (§3.5).~~ Done — see
+  `sim/park.ts`. This was pulled forward out of phase 4 because the server wants it before
+  the validator is written.
 
 Deferred with reasons rather than forgotten:
 

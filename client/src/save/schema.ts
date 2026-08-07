@@ -11,6 +11,7 @@
  */
 
 import { SAVE_VERSION, type GameState } from '../core/state';
+import { parkRating, parkValue } from '../sim/park';
 import { migrate } from './migrations';
 
 /**
@@ -39,8 +40,8 @@ export function summarize(state: GameState): SaveSummary {
     saveVersion: state.version,
     day: state.dayCount,
     funds: Math.round(state.funds),
-    parkValue: Math.round(state.funds + state.builtValue),
-    rating: state.rating,
+    parkValue: Math.round(parkValue(state)),
+    rating: parkRating(state),
     guests: state.guests,
   };
 }

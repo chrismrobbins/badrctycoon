@@ -52,12 +52,12 @@ function fromLegacy(s: LegacySave): GameState {
   next.landPurchased = num(s.landPurchased, 0);
 
   next.funds = num(s.funds, next.funds);
-  next.builtValue = num(s.builtValue, 0);
   next.loanBalance = num(s.loanBalance, 0);
   next.admissionPrice = num(s.admissionPrice, 12);
   if (obj<any>(s.ledger, null as any)?.income) next.ledger = s.ledger as GameState['ledger'];
 
-  next.rating = num(s.rating, 0);
+  // `rating` and `builtValue` are not read from legacy saves: they are derived
+  // from the map now (sim/park.ts), and the stored figures had already drifted.
   next.dayCount = num(s.dayCount, 1);
   next.gameTime = num(s.gameTime, 6);
   next.objectiveIndex = num(s.objectiveIndex, 0);
@@ -94,8 +94,8 @@ function fromLegacy(s: LegacySave): GameState {
 /**
  * Bring any recovered save up to SAVE_VERSION.
  *
- * Add a `case` per version bump. Each step mutates in place and falls through to
- * the next -- no `break`, that is the point.
+ * Append one `if (s.version < N)` block per version bump. Each mutates in place
+ * and the next one sees the result, so an ancient save walks the whole ladder.
  */
 function upgrade(s: GameState): GameState {
   // A ladder, not a switch: each step runs in order for any save old enough to
@@ -112,7 +112,17 @@ function upgrade(s: GameState): GameState {
     s.version = 7;
   }
 
-  // if (s.version < 8) { ...; s.version = 8; }
+  if (s.version < 8) {
+    // v8 made `rating` and `builtValue` derived (sim/park.ts) rather than stored
+    // accumulators. The stored figures had already drifted in any park where
+    // something was demolished or undone, so they are dropped rather than
+    // trusted -- recomputing from the map gives the correct value anyway.
+    delete (s as Partial<Record<'rating' | 'builtValue', number>>).rating;
+    delete (s as Partial<Record<'rating' | 'builtValue', number>>).builtValue;
+    s.version = 8;
+  }
+
+  // if (s.version < 9) { ...; s.version = 9; }
 
   s.version = SAVE_VERSION;
   return s;
