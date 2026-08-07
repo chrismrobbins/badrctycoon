@@ -376,16 +376,26 @@ over ~2 KB automatically, so `jsonb` costs little over `bytea` and stays queryab
 
 Schema: [`server/migrations/001_init.sql`](../server/migrations/001_init.sql).
 
-### 6.4 One platform, many games
+### 6.4 Many parks, one account — and this game stands alone
 
-The arcade shows where this is heading: several games, one account. Every game-scoped table in
-the schema therefore carries a `game_id` from the first migration — `save_slots`, `scores`,
-`achievements`. That is a one-column decision now and a painful backfill later.
+**A player keeps up to 12 named parks.** That is `save_slots`: one row per park, each with its
+own name, blob, headline stats, revision and history, keyed `UNIQUE (user_id, slot)`. This is
+the save/load-game feature, and it is the reason the slot metadata is denormalised — a load
+screen listing twelve parks must not parse twelve 200 KB blobs.
 
-The client-side corollary: **the game must be embeddable.** `client/index.html` should contain
-the game and nothing else, and `main.js` should export `mount(container, { api, onExit })` /
-`destroy()` so an arcade shell can host it. All the marketing chrome, the contact/RFP modal
-and the ZoomInfo tag come out.
+An earlier draft of this document also assumed the game would join the Caf2Code arcade, and
+carried a `games` table plus a `game_id` on every game-scoped table so several *titles* could
+share one login. **It is standalone, so that came out.** The two ideas are easy to confuse and
+are unrelated: `slot` is how many parks one player keeps, `game_id` was how many different
+games shared an account.
+
+That earlier draft also claimed adding `game_id` later would be a painful backfill. That was
+wrong, and it is worth recording why: a backfill is only painful when the value cannot be
+inferred. Here every existing row would take the same constant, so it is a ten-line migration
+if a second title ever appears.
+
+Standalone also means the game does not need to be embeddable — no `mount(container)` export,
+no host shell. `client/index.html` is the whole application.
 
 ---
 
@@ -418,7 +428,7 @@ Each phase ships independently and is revertable. No big-bang rewrite.
 | **5** ✅ | Fixed-timestep loop. Fixes §2.3, §2.5, §3.2. Seeded RNG deliberately deferred. | Frame-rate independence, pause works |
 | **6** ◐ | Migration chain that never rejects landed early, with phase 2. §3.6 (litter leak, redundant `anchorOf`) still open. | Saves survive version bumps |
 | **7** | Postgres + API. Auth, slots, sync, conflict UI. See [API-CONTRACT.md](API-CONTRACT.md). | Cloud saves |
-| **8** | Leaderboards, achievements, arcade shell embedding. | Platform |
+| **8** | Leaderboards, achievements, multi-park slot picker. | Platform |
 
 Phases 2 and 3 are where the "modular and scalable" ask is actually paid off. Phase 6 must
 land before phase 7 — putting a lossy, version-fragile save format behind a network boundary

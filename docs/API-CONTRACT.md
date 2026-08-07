@@ -68,14 +68,20 @@ GET    /api/auth/me                                                       -> 200
 ### Saves
 
 ```
-GET    /api/games/:gameId/slots              -> 200 { slots: SlotMeta[] }
-GET    /api/games/:gameId/slots/:slot        -> 200 { meta: SlotMeta, state: GameState }
-PUT    /api/games/:gameId/slots/:slot        -> 200 { meta: SlotMeta } | 409 | 400
-DELETE /api/games/:gameId/slots/:slot        -> 204
+GET    /api/slots              -> 200 { slots: SlotMeta[] }
+GET    /api/slots/:slot        -> 200 { meta: SlotMeta, state: GameState }
+PUT    /api/slots/:slot        -> 200 { meta: SlotMeta } | 409 | 400
+DELETE /api/slots/:slot        -> 204
 ```
 
-`gameId` is `badrctycoon`. It is in the path because the schema is multi-game from
-day one — see ARCHITECTURE §6.4.
+**A "slot" is a saved park.** Each user gets up to 12, each with its own name,
+blob, headline stats, revision and history — that is the save/load-game feature.
+`slot` is `1..12`, enforced by `save_slots_slot_range`.
+
+Not to be confused with the `game_id` an earlier draft carried: that was for
+several *different titles* sharing one login (the arcade), and came out because
+this game is standalone. It never had anything to do with how many parks a player
+can keep.
 
 ```ts
 interface SlotMeta {
@@ -93,7 +99,7 @@ interface SlotMeta {
 }
 ```
 
-`GET /slots` must **not** read `save_blobs`. That is why those columns are
+`GET /api/slots` must **not** read `save_blobs`. That is why those columns are
 denormalised onto `save_slots`; the load screen and leaderboard should never
 parse a 200 KB blob.
 
@@ -111,7 +117,7 @@ parse a 200 KB blob.
 ### Leaderboard
 
 ```
-GET /api/games/:gameId/leaderboard?metric=park_value&limit=50
+GET /api/leaderboard?metric=park_value&limit=50
 ```
 
 Metrics: `park_value`, `guests_peak`, `day_reached`.
@@ -230,5 +236,6 @@ not a gate.
 - **Slot count.** Schema currently caps at 12 (`save_slots_slot_range`).
 - **Guest persistence.** Guests are in the blob from v6 and are most of its size.
   If blobs get uncomfortable, dropping them is a migration, not a redesign.
-- **`game_id`.** Present on every game-scoped table already. Nothing else needs to
-  change to host a second game.
+- **A second title sharing these accounts.** Not planned -- the game is
+  standalone. If it ever happens, adding `game_id` back to save_slots, scores and
+  achievements is a ~10-line migration with a constant default.

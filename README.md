@@ -24,7 +24,7 @@ npm test           # Playwright smoke suite
 | 3 | ✅ | Content registry — nine hand-synced tables collapsed to one |
 | 4 | ◐ | `sim/finance.ts` out and the ledger fixed; `render/`, `ui/` and the rest of `sim/` still in `main.ts` |
 | 5 | ✅ | One fixed-timestep clock; pause and frame-rate bugs fixed |
-| 6–8 | | Save-size cleanup, Postgres + API, platform |
+| 6–8 | | Save-size cleanup, Postgres + API, accounts and up to 12 saved parks per player |
 
 Bugs fixed along the way: reloading no longer empties a busy park; a version bump no longer
 destroys saves; pausing actually pauses (a paused park used to keep earning shop revenue);
