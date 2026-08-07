@@ -1,0 +1,28 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "types": ["vite/client", "node"],
+
+    // Deliberately loose. The ported monolith is ~4,500 lines of untyped JS and
+    // must compile from day one; phases 3-4 split it into modules and tighten
+    // each one as it lands. Turning `strict` on now would stall the port on
+    // hundreds of annotations that the split is about to invalidate.
+    // Ratchet order once modules exist: noImplicitAny -> strictNullChecks -> strict.
+    "strict": false,
+    "noImplicitAny": false,
+    "strictNullChecks": false,
+
+    "allowJs": true,
+    "skipLibCheck": true,
+    "isolatedModules": true,
+    "verbatimModuleSyntax": true,
+    "noEmit": true,
+    "noUnusedLocals": false,
+    "noFallthroughCasesInSwitch": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": ["client/src", "tests", "vite.config.ts", "playwright.config.ts"]
+}
