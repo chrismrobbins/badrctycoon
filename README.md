@@ -36,7 +36,13 @@ demolish or undo; un-researched rides are greyed out again.
 
 ## Backend
 
-Not started. [docs/API-CONTRACT.md](docs/API-CONTRACT.md) is the handoff: endpoints, the save
+Server not started. The **client half is built**: `net/client.ts` (typed API client) and
+`save/sync.ts` (local-first sync with 409 conflict handling), both written to the contract and
+tested against a fake server in `tests/sync.spec.ts`. Neither has talked to a real server yet.
+Missing on this side: `ui/auth.ts` — the login form, slot picker and conflict dialog that would
+drive the engine.
+
+[docs/API-CONTRACT.md](docs/API-CONTRACT.md) is the handoff: endpoints, the save
 blob shape, optimistic concurrency, and the invariants the server must check rather than
 trust. `core/`, `content/`, `sim/finance` and `save/migrations` are proven Node-importable
 (`tests/portability.spec.ts`), so the server should reuse them instead of restating the

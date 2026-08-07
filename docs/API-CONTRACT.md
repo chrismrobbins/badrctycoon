@@ -17,8 +17,9 @@ document is the interface.
 | Migration chain | `client/src/save/migrations.ts` | Done |
 | Ledger invariant | `client/src/sim/finance.ts` | Done |
 | Content registry | `client/src/content/` | Done |
-| HTTP client / sync | — | **Not built.** Client is localStorage-only |
-| Auth UI | — | **Not built** |
+| HTTP client | `client/src/net/client.ts` | Written to this contract; never run against a real server |
+| Sync engine | `client/src/save/sync.ts` | Written and tested against a fake server (`tests/sync.spec.ts`) |
+| Auth UI | — | **Not built.** Nothing drives the engine yet |
 
 The schema has never been executed. Expect to fix something on first `psql -f`.
 
@@ -74,7 +75,16 @@ GET    /api/slots              -> 200 { slots: SlotMeta[] }
 GET    /api/slots/:slot        -> 200 { meta: SlotMeta, state: GameState }
 PUT    /api/slots/:slot        -> 200 { meta: SlotMeta } | 409 | 400
 DELETE /api/slots/:slot        -> 204
+
+POST   /api/slots/:slot/beacon -> 204 always
 ```
+
+`POST .../beacon` is an alias for the PUT, same body, for `navigator.sendBeacon()`
+on tab-hide. Beacons are always POST and the page is usually gone before any
+response arrives, so **it must answer 204 unconditionally** — including on a
+revision conflict. Validate and, on conflict, simply don't write; the client
+discovers the conflict on its next real PUT. Returning 409 here would be shouting
+into a closed tab.
 
 **A "slot" is a saved park.** Each user gets up to 12, each with its own name,
 blob, headline stats, revision and history — that is the save/load-game feature.
@@ -220,19 +230,31 @@ Stable machine-readable `code`; `message` is for humans and may change. Use
 `409` revision conflict, `413` too large, `422` failed a game invariant,
 `429` rate limited.
 
-## 8. What the client still needs
+## 8. What the client already does, and what is missing
 
-Not built — whoever does the backend should expect to add these, or hand back a
-spec for them:
+`net/client.ts` and `save/sync.ts` are written **to this document**, which is the
+main reason to trust it is implementable — but they have only ever talked to the
+fake server in `tests/sync.spec.ts`. Treat the first real integration as a review
+of both sides, and expect to find at least one place where the doc was ambiguous.
 
-- `client/src/net/client.ts` — fetch wrapper, credentials, error mapping
-- `client/src/save/sync.ts` — local-first: keep autosaving to IndexedDB, push on
-  manual save, on `visibilitychange → hidden` via `sendBeacon`, and every 60 s
-  while dirty
-- `client/src/ui/auth.ts` — login/register, slot picker, the 409 conflict prompt
+Behaviour the sync engine already implements, and that the server should expect:
 
-The game must stay fully playable logged out. Accounts add cloud saves; they are
-not a gate.
+- Local storage is written **before** any network call. A failed push never costs
+  progress; the park just stays `dirty`.
+- Pushes happen on explicit save, every 60 s while dirty, and on
+  `visibilitychange → hidden` via `sendBeacon` to the beacon alias.
+- A 409 moves the engine to `conflict` and **stops pushing entirely** until the
+  player resolves it, so there is no retry storm against a slot that will keep
+  refusing.
+- Resolution is `keepLocal()` (rebase onto the server revision and overwrite) or
+  `takeRemote()` (fetch and replace the live park).
+- A 401 drops to local-only rather than surfacing an error, so an expired cookie
+  does not interrupt play.
+
+Still missing: **`client/src/ui/auth.ts`** — the login/register form, the slot
+picker, and the dialog that presents a conflict. Nothing drives the engine
+without it. The game stays fully playable logged out either way; accounts add
+cloud saves, they are not a gate.
 
 ## 9. Decisions still open
 
