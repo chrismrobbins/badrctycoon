@@ -1,4 +1,6 @@
 import './styles/app.css';
+import { createGameState, type RideQueue } from './core/state';
+import { SAVE_KEY, loadFromLocalStorage, saveToLocalStorage } from './save/schema';
 
 // ---------------------------------------------------------------------------
 // PHASE 1: this file is the monolith's <script> block moved verbatim out of
@@ -30,29 +32,20 @@ let coasterPath: TrackPoint[] | null = null;
 let megaCoasterPath: TrackPoint[] | null = null;
 let megaCoasterLoop: { c: TrackPoint; r: number } | null = null;
 
-interface RideQueue {
-    queue: number;
-    ridersOnBoard: number;
-    cycleTimer: number;
-    broken: boolean;
-    repairTimer: number;
-    riders: number;
-    earned: number;
-    breakdowns: number;
-}
 
 // --- Isometric Game Engine (v3 — shops & guest needs, breakdowns, weather, objectives, land expansion, zoom/pan, autosave) ---
 const canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
 const ctx = canvas.getContext('2d')!;
 const nightOverlay = document.getElementById('night-overlay');
 
-// Game State
-const SAVE_KEY = 'c2c_park_v4';
-let GRID_SIZE = 15;
+// ── Game state ──
+// Everything persisted lives on S (see core/state.ts). Session and view state
+// -- camera, current tool, speed, open panels, audio, undo, transient FX --
+// stays module-level below until phase 4 gives it homes in ui/ and render/.
+const S = createGameState();
+
 const TILE_W = 64;
 const TILE_H = 32;
-let map = [];           // 2D array of type strings or null
-let anchorOf = {};      // "x,y" → {ax,ay} — every occupied tile points to its anchor
 
 // RCT-style park entrance: a fixed 3-tile-wide gate on the west edge that the
 // player can never build on or bulldoze. Guests spawn at its centre tile.
@@ -61,18 +54,8 @@ const ENTRANCE_Y = 7;                    // centre of the gate — never moves
 const ENTRANCE_TILES = [[0, 6], [0, 7], [0, 8]];
 function isEntranceTile(x, y) { return x === ENTRANCE_X && y >= ENTRANCE_Y - 1 && y <= ENTRANCE_Y + 1; }
 
-let funds = 10000;
-let guests = 0;
-let visualGuests = [];
-let isParkOpen = false;
-let rating = 0;
 let currentTool = 'path';
-let parkHappiness = 50;  // 0-100
-let builtValue = 0;      // sum of construction costs — park value = funds + builtValue
-let shopSales = 0;
-let dayCount = 1;
 let gameSpeed = 1;       // 0 = paused, 1 = normal, 3 = fast
-let objectiveIndex = 0;
 
 // Camera
 let zoom = 1;
@@ -85,19 +68,15 @@ let hoveredCell = { x: -1, y: -1 };
 let isDragging = false;
 
 // Day/Night Cycle
-let gameTime = 6.0;     // hours 0-24, start at 6 AM
 const TIME_SPEED = 0.15; // hours per economy tick (1.5s)
-let isNight = false;
+let isNight = false;     // derived from S.gameTime each updateUI()
 
-// Weather
-let weather = 'clear';   // clear | cloudy | rain
-let weatherTicks = 30;   // economy ticks until next roll
+// Weather FX (the weather itself is S.weather)
 let rainDrops = [];
 let rainAlpha = 0;
 
 // Land expansion
 const LAND_COSTS = [5000, 12000, 25000, 45000, 80000];
-let landPurchased = 0;
 
 // Fireworks
 let fireworkParticles = [];
@@ -145,9 +124,6 @@ const BUILD_DATA = {
 };
 
 // Ride Queues: keyed by "ax,ay"
-let rideQueues: Record<string, RideQueue> = {};   // keyed by anchor "ax,ay"
-let rideNames = {};    // "ax,ay" → player-facing name
-let shopStats = {};    // "x,y"   → { sales, earned }
 let inspectedKey = null;
 
 // ── Ride naming ──
@@ -171,7 +147,7 @@ const NAME_POOL = {
 
 function nextName(type) {
     const pool = NAME_POOL[type] || [TYPE_LABEL[type] || type];
-    const used = new Set(Object.values(rideNames));
+    const used = new Set(Object.values(S.rideNames));
     for (const n of pool) if (!used.has(n)) return n;
     // Pool exhausted — number them
     let i = 2;
@@ -186,19 +162,19 @@ function randomName(type) {
 
 // ── Ride Inspector panel ──
 function anchorKeyAt(x, y) {
-    const a = anchorOf[`${x},${y}`];
+    const a = S.anchorOf[`${x},${y}`];
     return a ? `${a.ax},${a.ay}` : `${x},${y}`;
 }
 
 function openRidePanel(key) {
     const [ax, ay] = key.split(',').map(Number);
-    const type = map[ax]?.[ay];
+    const type = S.map[ax]?.[ay];
     if (!type || (!RIDE_TYPES.has(type) && !SHOP_TYPES.has(type))) return;
     inspectedKey = key;
-    if (!rideNames[key]) rideNames[key] = nextName(type);
+    if (!S.rideNames[key]) S.rideNames[key] = nextName(type);
     document.getElementById('ride-panel').classList.remove('hidden');
     const nameEl = document.getElementById('ride-name') as HTMLInputElement;
-    nameEl.value = rideNames[key];
+    nameEl.value = S.rideNames[key];
     document.getElementById('ride-type').textContent = TYPE_LABEL[type] || type;
     renderRideStats();
 }
@@ -223,13 +199,13 @@ function statRow(label, value, color?) {
 function renderRideStats() {
     if (!inspectedKey) return;
     const [ax, ay] = inspectedKey.split(',').map(Number);
-    const type = map[ax]?.[ay];
+    const type = S.map[ax]?.[ay];
     if (!type) { closeRidePanel(); return; }
     const d = BUILD_DATA[type];
     const el = document.getElementById('ride-stats');
     let html = '';
     if (RIDE_TYPES.has(type)) {
-        const q: Partial<RideQueue> = rideQueues[inspectedKey] || {};
+        const q: Partial<RideQueue> = S.rideQueues[inspectedKey] || {};
         const scenery = getSceneryBonusAt(ax, ay);
         const nightB = isNight ? d.nightBonus : 0;
         const total = d.excitement + scenery + nightB;
@@ -246,7 +222,7 @@ function renderRideStats() {
         html += statRow('Breakdowns', q.breakdowns || 0, (q.breakdowns ? 'text-red-500' : null));
         html += statRow('Built for', `$${d.cost.toLocaleString()}`);
     } else {
-        const s = shopStats[inspectedKey] || { sales: 0, earned: 0 };
+        const s = S.shopStats[inspectedKey] || { sales: 0, earned: 0 };
         html += statRow('Status', 'Open', 'text-green-500');
         html += statRow('Price per sale', `$${d.price}`, 'text-green-500');
         html += statRow('Total sales', s.sales.toLocaleString(), 'text-blue-500');
@@ -261,15 +237,15 @@ function renderRideStats() {
 function renameRandom() {
     if (!inspectedKey) return;
     const [ax, ay] = inspectedKey.split(',').map(Number);
-    rideNames[inspectedKey] = randomName(map[ax]?.[ay]);
-    (document.getElementById('ride-name') as HTMLInputElement).value = rideNames[inspectedKey];
+    S.rideNames[inspectedKey] = randomName(S.map[ax]?.[ay]);
+    (document.getElementById('ride-name') as HTMLInputElement).value = S.rideNames[inspectedKey];
     saveGame();
 }
 
 function demolishInspected() {
     if (!inspectedKey) return;
     const [ax, ay] = inspectedKey.split(',').map(Number);
-    const name = rideNames[inspectedKey] || 'this ride';
+    const name = S.rideNames[inspectedKey] || 'this ride';
     if (!confirm(`Demolish "${name}"? You'll get half your money back.`)) return;
     const prevTool = currentTool;
     currentTool = 'bulldozer';
@@ -282,17 +258,9 @@ function demolishInspected() {
 //  PARK SYSTEMS — staff, litter, economy, research, awards
 // ═══════════════════════════════════════════════════════════
 
-let litter = {};              // "x,y" → 0..3 units of trash on a path tile
-let staff = [];               // hired workers walking the park
-let admissionPrice = 12;
-let loanBalance = 0;
 const LOAN_LIMIT = 60000;
 const DAILY_INTEREST = 0.005;
-let marketing = { key: null, daysLeft: 0 };
-let awardsWon = [];
-let lastAwardDay = 0;
 let undoStack = [];
-let cleanliness = 100;        // 0-100, park-wide
 
 const STAFF_KINDS = {
     janitor:     { label: 'Janitor',     wage: 30, color: '#22c55e', icon: 'fa-broom',   blurb: 'Sweeps litter off your paths' },
@@ -309,59 +277,54 @@ const MARKETING_CAMPAIGNS = {
 
 // Research — rides unlock in order as you invest
 const RESEARCH_ORDER = ['teacups', 'balloonstand', 'bumper', 'droptower', 'ship', 'ferriswheel', 'haunted', 'gokarts', 'coaster', 'megacoaster'];
-let research = { unlocked: ['path','flowerbed','trashcan','bench','lamp','tree','fountain','foodstall','drinkstall','restroom','carousel'], progress: 0, budget: 40 };
 
-function isUnlocked(tool) { return tool === 'bulldozer' || research.unlocked.includes(tool); }
+
+function isUnlocked(tool) { return tool === 'bulldozer' || S.research.unlocked.includes(tool); }
 
 // Ledger — accumulates all-time, plus a per-day snapshot for the report
-let ledger = {
-    income:  { admission: 0, rides: 0, shops: 0, objectives: 0, loans: 0 },
-    expense: { construction: 0, wages: 0, repairs: 0, interest: 0, marketing: 0, research: 0, land: 0, loanRepaid: 0 },
-};
-let dayLedger = JSON.parse(JSON.stringify(ledger));
 
 function earn(amount, bucket) {
-    funds += amount;
-    ledger.income[bucket] = (ledger.income[bucket] || 0) + amount;
-    dayLedger.income[bucket] = (dayLedger.income[bucket] || 0) + amount;
+    S.funds += amount;
+    S.ledger.income[bucket] = (S.ledger.income[bucket] || 0) + amount;
+    S.dayLedger.income[bucket] = (S.dayLedger.income[bucket] || 0) + amount;
 }
 function spend(amount, bucket) {
-    funds -= amount;
-    ledger.expense[bucket] = (ledger.expense[bucket] || 0) + amount;
-    dayLedger.expense[bucket] = (dayLedger.expense[bucket] || 0) + amount;
+    S.funds -= amount;
+    S.ledger.expense[bucket] = (S.ledger.expense[bucket] || 0) + amount;
+    S.dayLedger.expense[bucket] = (S.dayLedger.expense[bucket] || 0) + amount;
 }
 const sumOf = (o) => (Object.values(o) as number[]).reduce((a, b) => a + b, 0);
 
 // ── Litter ──
-function litterAt(x, y) { return litter[`${x},${y}`] || 0; }
+function litterAt(x, y) { return S.litter[`${x},${y}`] || 0; }
 
 function dropLitter(x, y) {
     // A trash can within 2 tiles almost always prevents littering
     for (let ox = -2; ox <= 2; ox++) {
         for (let oy = -2; oy <= 2; oy++) {
-            if (map[x + ox]?.[y + oy] === 'trashcan' && Math.random() < 0.9) return;
+            if (S.map[x + ox]?.[y + oy] === 'trashcan' && Math.random() < 0.9) return;
         }
     }
     const k = `${x},${y}`;
-    litter[k] = Math.min(3, (litter[k] || 0) + 1);
+    S.litter[k] = Math.min(3, (S.litter[k] || 0) + 1);
 }
 
 function recomputeCleanliness() {
     let paths = 0, dirty = 0;
-    for (let x = 0; x < GRID_SIZE; x++) {
-        for (let y = 0; y < GRID_SIZE; y++) {
-            if (map[x][y] === 'path') { paths++; dirty += litterAt(x, y); }
+    for (let x = 0; x < S.gridSize; x++) {
+        for (let y = 0; y < S.gridSize; y++) {
+            if (S.map[x][y] === 'path') { paths++; dirty += litterAt(x, y); }
         }
     }
-    cleanliness = paths ? Math.max(0, 100 - (dirty / paths) * 55) : 100;
+    S.cleanliness = paths ? Math.max(0, 100 - (dirty / paths) * 55) : 100;
 }
 
 // ── Staff ──
 function pathTiles() {
     const out = [];
-    for (let x = 0; x < GRID_SIZE; x++)
-        for (let y = 0; y < GRID_SIZE; y++)
-            if (map[x][y] === 'path' || map[x][y] === 'entrance') out.push({ x, y });
+    for (let x = 0; x < S.gridSize; x++)
+        for (let y = 0; y < S.gridSize; y++)
+            if (S.map[x][y] === 'path' || S.map[x][y] === 'entrance') out.push({ x, y });
     return out;
 }
 
@@ -370,29 +333,29 @@ function hireStaff(kind) {
     if (!k) return;
     const tiles = pathTiles();
     if (!tiles.length) { logEvent('Build some paths before hiring staff.', 'bad'); return; }
-    if (funds < k.wage * 2) { logEvent(`Not enough cash to hire a ${k.label}.`, 'bad'); return; }
+    if (S.funds < k.wage * 2) { logEvent(`Not enough cash to hire a ${k.label}.`, 'bad'); return; }
     const start = tiles[Math.floor(Math.random() * tiles.length)];
-    staff.push({
+    S.staff.push({
         kind, name: STAFF_NAMES[Math.floor(Math.random() * STAFF_NAMES.length)],
         x: start.x, y: start.y, tx: start.x, ty: start.y, progress: 1,
         speed: 0.024 + Math.random() * 0.012, task: null, swing: Math.random() * 6,
         route: null, reroute: 0, cleaned: 0, sweepFx: 0, lastX: -1, lastY: -1
     });
-    logEvent(`Hired ${staff[staff.length - 1].name} as a ${k.label} ($${k.wage}/day).`, 'good');
+    logEvent(`Hired ${S.staff[S.staff.length - 1].name} as a ${k.label} ($${k.wage}/day).`, 'good');
     if (mgmtTab === 'staff') renderMgmt();
     sfx('hire');
 }
 
 function fireStaff(kind) {
-    const i = staff.findIndex(s => s.kind === kind);
+    const i = S.staff.findIndex(s => s.kind === kind);
     if (i < 0) return;
-    logEvent(`${staff[i].name} (${STAFF_KINDS[kind].label}) has left the park.`, 'info');
-    staff.splice(i, 1);
+    logEvent(`${S.staff[i].name} (${STAFF_KINDS[kind].label}) has left the park.`, 'info');
+    S.staff.splice(i, 1);
     if (mgmtTab === 'staff') renderMgmt();
 }
 
-function staffCount(kind) { return staff.filter(s => s.kind === kind).length; }
-function dailyWages() { return staff.reduce((sum, s) => sum + STAFF_KINDS[s.kind].wage, 0); }
+function staffCount(kind) { return S.staff.filter(s => s.kind === kind).length; }
+function dailyWages() { return S.staff.reduce((sum, s) => sum + STAFF_KINDS[s.kind].wage, 0); }
 
 // Breadth-first walk over walkable tiles → the shortest route to the nearest
 // tile satisfying `isGoal`. Greedy stepping used to stall in corridors and
@@ -418,8 +381,8 @@ function bfsRoute(from, isGoal, adjacentIsEnough?) {
         }
         for (const [dx, dy] of dirs) {
             const nx = cx + dx, ny = cy + dy;
-            if (nx < 0 || ny < 0 || nx >= GRID_SIZE || ny >= GRID_SIZE) continue;
-            const c = map[nx]?.[ny];
+            if (nx < 0 || ny < 0 || nx >= S.gridSize || ny >= S.gridSize) continue;
+            const c = S.map[nx]?.[ny];
             if (c !== 'path' && c !== 'entrance') continue;
             const k = kk(nx, ny);
             if (prev.has(k)) continue;
@@ -448,8 +411,8 @@ function wanderStep(w) {
     const options = [];
     for (const [dx, dy] of dirs) {
         const nx = w.x + dx, ny = w.y + dy;
-        if (nx < 0 || ny < 0 || nx >= GRID_SIZE || ny >= GRID_SIZE) continue;
-        const c = map[nx]?.[ny];
+        if (nx < 0 || ny < 0 || nx >= S.gridSize || ny >= S.gridSize) continue;
+        const c = S.map[nx]?.[ny];
         if (c === 'path' || c === 'entrance') options.push({ x: nx, y: ny });
     }
     if (!options.length) return;
@@ -464,7 +427,7 @@ function wanderStep(w) {
 // 1.5s economy tick made staff move ~1 tile per 90 seconds, so janitors could
 // never keep up with littering.
 function updateStaff() {
-    for (const w of staff) {
+    for (const w of S.staff) {
         if (w.progress < 1) { w.progress += w.speed; continue; }
         w.x = w.tx; w.y = w.ty;
         if (w.sweepFx > 0) w.sweepFx--;
@@ -473,13 +436,13 @@ function updateStaff() {
             // Sweep the tile underfoot clean, and knock back the neighbours
             let didClean = false;
             if (litterAt(w.x, w.y) > 0) {
-                litter[`${w.x},${w.y}`] = 0;
+                S.litter[`${w.x},${w.y}`] = 0;
                 didClean = true;
                 w.cleaned = (w.cleaned || 0) + 1;
             }
             for (const [dx, dy] of [[0, 1], [1, 0], [0, -1], [-1, 0]]) {
                 const k = `${w.x + dx},${w.y + dy}`;
-                if (litter[k] > 0) { litter[k] = Math.max(0, litter[k] - 1); didClean = true; }
+                if (S.litter[k] > 0) { S.litter[k] = Math.max(0, S.litter[k] - 1); didClean = true; }
             }
             if (didClean) { w.sweepFx = 20; recomputeCleanliness(); }
 
@@ -494,18 +457,18 @@ function updateStaff() {
         } else if (w.kind === 'mechanic') {
             // Rush to broken rides; standing beside one slashes repair time
             const brokenAt = (x, y) => {
-                const a = anchorOf[`${x},${y}`];
+                const a = S.anchorOf[`${x},${y}`];
                 const key = a ? `${a.ax},${a.ay}` : `${x},${y}`;
-                return !!(rideQueues[key] && rideQueues[key].broken);
+                return !!(S.rideQueues[key] && S.rideQueues[key].broken);
             };
             let working = false;
             for (const [dx, dy] of [[0, 0], [0, 1], [1, 0], [0, -1], [-1, 0]]) {
                 const nx = w.x + dx, ny = w.y + dy;
-                if (nx < 0 || ny < 0 || nx >= GRID_SIZE || ny >= GRID_SIZE) continue;
+                if (nx < 0 || ny < 0 || nx >= S.gridSize || ny >= S.gridSize) continue;
                 if (!brokenAt(nx, ny)) continue;
-                const a = anchorOf[`${nx},${ny}`];
+                const a = S.anchorOf[`${nx},${ny}`];
                 const key = a ? `${a.ax},${a.ay}` : `${nx},${ny}`;
-                rideQueues[key].repairTimer -= 0.35;   // per frame — a mechanic on site fixes it fast
+                S.rideQueues[key].repairTimer -= 0.35;   // per frame — a mechanic on site fixes it fast
                 working = true;
                 w.sweepFx = 6;
                 break;
@@ -525,7 +488,7 @@ function updateStaff() {
         } else {
             // Entertainer — cheer up anyone nearby
             let cheered = 0;
-            for (const g of visualGuests) {
+            for (const g of S.visualGuests) {
                 if (Math.abs(g.x - w.x) + Math.abs(g.y - w.y) <= 2) {
                     g.happiness = Math.min(100, g.happiness + 0.12);
                     cheered++;
@@ -606,28 +569,28 @@ function drawLitterAt(x, y, sx, sy) {
 
 // ── Awards ──
 const AWARD_DEFS = [
-    { id: 'clean',   label: 'Cleanest Park in the Region', icon: 'fa-broom',      test: () => cleanliness >= 92 && guests >= 15, rating: 40 },
-    { id: 'value',   label: 'Best Value Park',             icon: 'fa-tags',       test: () => admissionPrice <= 10 && parkHappiness >= 70 && guests >= 20, rating: 45 },
+    { id: 'clean',   label: 'Cleanest Park in the Region', icon: 'fa-broom',      test: () => S.cleanliness >= 92 && S.guests >= 15, rating: 40 },
+    { id: 'value',   label: 'Best Value Park',             icon: 'fa-tags',       test: () => S.admissionPrice <= 10 && S.parkHappiness >= 70 && S.guests >= 20, rating: 45 },
     { id: 'thrill',  label: 'Most Thrilling Park',         icon: 'fa-bolt',       test: () => totalExcitement() >= 400, rating: 60 },
-    { id: 'safe',    label: 'Safest Park',                 icon: 'fa-shield-halved', test: () => Object.values(rideQueues).length >= 4 && Object.values(rideQueues).every(q => (q.breakdowns || 0) === 0), rating: 55 },
-    { id: 'staffed', label: 'Best Staffed Park',           icon: 'fa-user-group', test: () => staff.length >= 4 && guests >= 25 && cleanliness >= 80, rating: 40 },
+    { id: 'safe',    label: 'Safest Park',                 icon: 'fa-shield-halved', test: () => Object.values(S.rideQueues).length >= 4 && Object.values(S.rideQueues).every(q => (q.breakdowns || 0) === 0), rating: 55 },
+    { id: 'staffed', label: 'Best Staffed Park',           icon: 'fa-user-group', test: () => S.staff.length >= 4 && S.guests >= 25 && S.cleanliness >= 80, rating: 40 },
     { id: 'beauty',  label: 'Most Beautiful Park',         icon: 'fa-seedling',   test: () => countType(['tree','flowerbed','fountain']) >= 20, rating: 50 },
-    { id: 'tycoon',  label: 'Tycoon of the Year',          icon: 'fa-crown',      test: () => funds + builtValue >= 100000, rating: 80 },
+    { id: 'tycoon',  label: 'Tycoon of the Year',          icon: 'fa-crown',      test: () => S.funds + S.builtValue >= 100000, rating: 80 },
 ];
 
 function countType(types) {
     let n = 0;
-    for (let x = 0; x < GRID_SIZE; x++)
-        for (let y = 0; y < GRID_SIZE; y++)
-            if (types.includes(map[x][y])) n++;
+    for (let x = 0; x < S.gridSize; x++)
+        for (let y = 0; y < S.gridSize; y++)
+            if (types.includes(S.map[x][y])) n++;
     return n;
 }
 
 function totalExcitement() {
     let t = 0;
-    for (const key in rideQueues) {
+    for (const key in S.rideQueues) {
         const [ax, ay] = key.split(',').map(Number);
-        const type = map[ax]?.[ay];
+        const type = S.map[ax]?.[ay];
         if (type && BUILD_DATA[type]) t += BUILD_DATA[type].excitement + getSceneryBonusAt(ax, ay);
     }
     return t;
@@ -635,12 +598,12 @@ function totalExcitement() {
 
 function evaluateAwards() {
     for (const a of AWARD_DEFS) {
-        if (awardsWon.some(w => w.id === a.id)) continue;
+        if (S.awardsWon.some(w => w.id === a.id)) continue;
         let passed = false;
         try { passed = a.test(); } catch (e) { passed = false; }
         if (passed) {
-            awardsWon.push({ id: a.id, day: dayCount });
-            rating += a.rating;
+            S.awardsWon.push({ id: a.id, day: S.dayCount });
+            S.rating += a.rating;
             logEvent(`🏆 AWARD: ${a.label}! (+${a.rating} rating)`, 'good');
             fireworksActive = true;
             fireworksTimer = Math.max(fireworksTimer, 6);
@@ -660,28 +623,28 @@ function undoLast() {
     if (!e) { logEvent('Nothing left to undo.', 'info'); return; }
     if (e.kind === 'build') {
         // Remove what was built and refund the full cost
-        for (const c of e.cells) { map[c.x][c.y] = null; delete anchorOf[`${c.x},${c.y}`]; }
-        funds += e.cost;
-        builtValue = Math.max(0, builtValue - e.cost);
-        rating -= e.rating;
-        delete rideQueues[e.key];
-        delete rideNames[e.key];
-        delete shopStats[e.key];
+        for (const c of e.cells) { S.map[c.x][c.y] = null; delete S.anchorOf[`${c.x},${c.y}`]; }
+        S.funds += e.cost;
+        S.builtValue = Math.max(0, S.builtValue - e.cost);
+        S.rating -= e.rating;
+        delete S.rideQueues[e.key];
+        delete S.rideNames[e.key];
+        delete S.shopStats[e.key];
         if (inspectedKey === e.key) closeRidePanel();
         logEvent(`Undid build (${TYPE_LABEL[e.type] || e.type}). $${e.cost.toLocaleString()} returned.`, 'info');
     } else {
         // Restore what was demolished and take back the refund
         for (const c of e.cells) {
-            map[c.x][c.y] = e.type;
-            if (e.cells.length > 1) anchorOf[`${c.x},${c.y}`] = { ax: e.cells[0].x, ay: e.cells[0].y };
+            S.map[c.x][c.y] = e.type;
+            if (e.cells.length > 1) S.anchorOf[`${c.x},${c.y}`] = { ax: e.cells[0].x, ay: e.cells[0].y };
         }
-        funds -= e.refund;
-        builtValue += e.cost;
-        rating += e.rating;
+        S.funds -= e.refund;
+        S.builtValue += e.cost;
+        S.rating += e.rating;
         if (RIDE_TYPES.has(e.type)) {
-            rideQueues[e.key] = { queue: 0, ridersOnBoard: 0, cycleTimer: 0, broken: false, repairTimer: 0, riders: 0, earned: 0, breakdowns: 0 };
+            S.rideQueues[e.key] = { queue: 0, ridersOnBoard: 0, cycleTimer: 0, broken: false, repairTimer: 0, riders: 0, earned: 0, breakdowns: 0 };
         }
-        if (e.name) rideNames[e.key] = e.name;
+        if (e.name) S.rideNames[e.key] = e.name;
         logEvent(`Restored ${e.name || TYPE_LABEL[e.type] || e.type}.`, 'info');
     }
     updateUI();
@@ -795,45 +758,45 @@ function renderMgmt() {
     let h = '';
 
     if (mgmtTab === 'finance') {
-        const inc = sumOf(ledger.income), exp = sumOf(ledger.expense);
-        const dInc = sumOf(dayLedger.income), dExp = sumOf(dayLedger.expense);
+        const inc = sumOf(S.ledger.income), exp = sumOf(S.ledger.expense);
+        const dInc = sumOf(S.dayLedger.income), dExp = sumOf(S.dayLedger.expense);
         const profit = dInc - dExp;
         h += `<div class="m-grid3">
-            <div class="m-tile" style="background:rgba(34,197,94,0.1)"><div class="k" style="color:${C.green}">Cash</div><div class="v">${money(funds)}</div></div>
-            <div class="m-tile" style="background:rgba(59,130,246,0.1)"><div class="k" style="color:${C.blue}">Park Value</div><div class="v">${money(funds + builtValue)}</div></div>
+            <div class="m-tile" style="background:rgba(34,197,94,0.1)"><div class="k" style="color:${C.green}">Cash</div><div class="v">${money(S.funds)}</div></div>
+            <div class="m-tile" style="background:rgba(59,130,246,0.1)"><div class="k" style="color:${C.blue}">Park Value</div><div class="v">${money(S.funds + S.builtValue)}</div></div>
             <div class="m-tile" style="background:${profit >= 0 ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)'}"><div class="k" style="color:${profit >= 0 ? C.green : C.red}">Today's Profit</div><div class="v">${money(profit)}</div></div>
         </div>`;
         h += `<div class="m-grid2">
             <div><div class="m-sec" style="color:${C.green}">Income (all time)</div>
-                ${row('Admissions', money(ledger.income.admission))}
-                ${row('Ride tickets', money(ledger.income.rides))}
-                ${row('Shop sales', money(ledger.income.shops))}
-                ${row('Objective bonuses', money(ledger.income.objectives))}
-                ${row('Loans drawn', money(ledger.income.loans))}
+                ${row('Admissions', money(S.ledger.income.admission))}
+                ${row('Ride tickets', money(S.ledger.income.rides))}
+                ${row('Shop sales', money(S.ledger.income.shops))}
+                ${row('Objective bonuses', money(S.ledger.income.objectives))}
+                ${row('Loans drawn', money(S.ledger.income.loans))}
                 ${row('Total', money(inc), C.green)}</div>
             <div><div class="m-sec" style="color:${C.red}">Expenses (all time)</div>
-                ${row('Construction', money(ledger.expense.construction))}
-                ${row('Staff wages', money(ledger.expense.wages))}
-                ${row('Repairs', money(ledger.expense.repairs))}
-                ${row('Loan interest', money(ledger.expense.interest))}
-                ${row('Marketing', money(ledger.expense.marketing))}
-                ${row('Research', money(ledger.expense.research))}
-                ${row('Land', money(ledger.expense.land))}
-                ${row('Loan repayments', money(ledger.expense.loanRepaid))}
+                ${row('Construction', money(S.ledger.expense.construction))}
+                ${row('Staff wages', money(S.ledger.expense.wages))}
+                ${row('Repairs', money(S.ledger.expense.repairs))}
+                ${row('Loan interest', money(S.ledger.expense.interest))}
+                ${row('Marketing', money(S.ledger.expense.marketing))}
+                ${row('Research', money(S.ledger.expense.research))}
+                ${row('Land', money(S.ledger.expense.land))}
+                ${row('Loan repayments', money(S.ledger.expense.loanRepaid))}
                 ${row('Total', money(exp), C.red)}</div>
         </div>`;
         h += `<div class="m-block">
             <div class="m-sec">Admission Price</div>
             <div class="m-flex">
-                <input id="price-slider" class="m-slider" type="range" min="0" max="40" value="${admissionPrice}" data-act="setAdmission">
-                <span id="price-label" style="font-weight:700;font-size:1.05rem;width:5rem;text-align:right;">${money(admissionPrice)}</span>
+                <input id="price-slider" class="m-slider" type="range" min="0" max="40" value="${S.admissionPrice}" data-act="setAdmission">
+                <span id="price-label" style="font-weight:700;font-size:1.05rem;width:5rem;text-align:right;">${money(S.admissionPrice)}</span>
             </div>
             <div class="m-note">Guests will pay up to about <b>${money(perceivedValue())}</b> for a park like this. Charge more and attendance drops.</div>
         </div>`;
         h += `<div class="m-block">
             <div class="m-sec">Loans</div>
-            ${row('Outstanding balance', money(loanBalance), loanBalance ? C.red : null)}
-            ${row('Daily interest', `${(DAILY_INTEREST * 100).toFixed(1)}% (${money(loanBalance * DAILY_INTEREST)}/day)`)}
+            ${row('Outstanding balance', money(S.loanBalance), S.loanBalance ? C.red : null)}
+            ${row('Daily interest', `${(DAILY_INTEREST * 100).toFixed(1)}% (${money(S.loanBalance * DAILY_INTEREST)}/day)`)}
             ${row('Credit limit', money(LOAN_LIMIT))}
             <div style="display:flex;gap:0.5rem;margin-top:0.75rem;">
                 <button class="m-btn blue" style="flex:1;padding:0.5rem;" data-act="borrow" data-arg="5000">Borrow $5,000</button>
@@ -857,12 +820,12 @@ function renderMgmt() {
             </div>`;
         }
         h += `<div class="m-block">
-            ${row('Total staff', staff.length)}
+            ${row('Total staff', S.staff.length)}
             ${row('Total daily wages', money(dailyWages()), C.red)}
-            ${row('Park cleanliness', `${Math.round(cleanliness)}%`, cleanliness > 80 ? C.green : cleanliness > 50 ? C.amber : C.red)}
+            ${row('Park cleanliness', `${Math.round(S.cleanliness)}%`, S.cleanliness > 80 ? C.green : S.cleanliness > 50 ? C.amber : C.red)}
         </div>`;
-        if (staff.length) {
-            h += `<div style="margin-top:1rem;"><div class="m-sec">On Shift</div>` + staff.map(w =>
+        if (S.staff.length) {
+            h += `<div style="margin-top:1rem;"><div class="m-sec">On Shift</div>` + S.staff.map(w =>
                 `<div style="display:flex;justify-content:space-between;font-size:11px;padding:2px 0;"><span><i class="fas ${STAFF_KINDS[w.kind].icon}" style="color:${STAFF_KINDS[w.kind].color};margin-right:0.375rem;"></i>${w.name}</span><span style="color:${C.slate};font-style:italic;">${w.task || 'starting shift'}</span></div>`
             ).join('') + `</div>`;
         }
@@ -870,11 +833,11 @@ function renderMgmt() {
 
     else if (mgmtTab === 'marketing') {
         h += `<div class="m-note" style="margin-bottom:1rem;">Campaigns temporarily raise how many guests show up. They stack with your rating and happiness.</div>`;
-        if (marketing.key) {
-            const c = MARKETING_CAMPAIGNS[marketing.key];
+        if (S.marketing.key) {
+            const c = MARKETING_CAMPAIGNS[S.marketing.key];
             h += `<div class="m-tile" style="background:rgba(59,130,246,0.1);margin-bottom:1rem;">
                 <div style="font-weight:700;font-size:0.875rem;color:${C.blue}"><i class="fas fa-bullhorn" style="margin-right:0.25rem;"></i>${c.label} running</div>
-                <div class="m-note">+${Math.round(c.boost * 100)}% attendance · ${marketing.daysLeft} day(s) left</div>
+                <div class="m-note">+${Math.round(c.boost * 100)}% attendance · ${S.marketing.daysLeft} day(s) left</div>
             </div>`;
         }
         for (const k in MARKETING_CAMPAIGNS) {
@@ -886,33 +849,33 @@ function renderMgmt() {
             </div>`;
         }
         h += `<div class="m-block">
-            ${row('Current attendance', `${guests} guests`)}
-            ${row('Park rating', rating)}
-            ${row('Average happiness', `${Math.round(parkHappiness)}%`)}
+            ${row('Current attendance', `${S.guests} guests`)}
+            ${row('Park rating', S.rating)}
+            ${row('Average happiness', `${Math.round(S.parkHappiness)}%`)}
         </div>`;
     }
 
     else if (mgmtTab === 'research') {
-        const next = RESEARCH_ORDER.find(t => !research.unlocked.includes(t));
+        const next = RESEARCH_ORDER.find(t => !S.research.unlocked.includes(t));
         h += `<div class="m-note" style="margin-bottom:1rem;">Your R&amp;D team designs new attractions. Higher funding unlocks them faster — the cost is billed daily.</div>`;
         if (next) {
             h += `<div class="m-tile" style="background:rgba(168,85,247,0.1);margin-bottom:1rem;">
                 <div class="k" style="color:${C.purple}">Now designing</div>
                 <div style="font-weight:700;font-size:1rem;margin:2px 0 0.5rem;">${TYPE_LABEL[next]}</div>
-                <div class="meter"><span style="width:${Math.min(100, research.progress)}%;background:${C.purple}"></span></div>
-                <div class="m-note">${Math.floor(research.progress)}% complete</div>
+                <div class="meter"><span style="width:${Math.min(100, S.research.progress)}%;background:${C.purple}"></span></div>
+                <div class="m-note">${Math.floor(S.research.progress)}% complete</div>
             </div>`;
         } else {
             h += `<div class="m-tile" style="background:rgba(34,197,94,0.1);margin-bottom:1rem;color:${C.green};font-weight:700;"><i class="fas fa-check-circle" style="margin-right:0.25rem;"></i>All attractions researched. Your engineers are napping.</div>`;
         }
         h += `<div class="m-sec">Daily Research Budget</div>
         <div class="m-flex" style="margin-bottom:1.25rem;">
-            <input type="range" class="m-slider purple" min="0" max="500" step="25" value="${research.budget}" data-act="setResearchBudget">
-            <span style="font-weight:700;width:6rem;text-align:right;">${money(research.budget)}/day</span>
+            <input type="range" class="m-slider purple" min="0" max="500" step="25" value="${S.research.budget}" data-act="setResearchBudget">
+            <span style="font-weight:700;width:6rem;text-align:right;">${money(S.research.budget)}/day</span>
         </div>`;
         h += `<div class="m-sec">Attraction List</div><div class="m-list">`;
         for (const t of RESEARCH_ORDER) {
-            const got = research.unlocked.includes(t);
+            const got = S.research.unlocked.includes(t);
             h += `<div class="m-chip${got ? ' got' : ''}"><i class="fas ${got ? 'fa-check' : 'fa-lock'}"></i>${TYPE_LABEL[t]}<span class="sp">${money(BUILD_DATA[t].cost)}</span></div>`;
         }
         h += `</div>`;
@@ -921,7 +884,7 @@ function renderMgmt() {
     else if (mgmtTab === 'awards') {
         h += `<div class="m-note" style="margin-bottom:1rem;">Inspectors visit every few days. Meet the criteria and your park earns a permanent rating boost.</div>`;
         for (const a of AWARD_DEFS) {
-            const won = awardsWon.find(w => w.id === a.id);
+            const won = S.awardsWon.find(w => w.id === a.id);
             h += `<div class="m-card"${won ? ' style="background:rgba(234,179,8,0.1)"' : ''}>
                 <div class="m-icon" style="${won ? 'background:rgba(234,179,8,0.2);color:#eab308' : 'background:rgba(100,116,139,0.12);color:#94a3b8'}"><i class="fas ${a.icon}"></i></div>
                 <div style="flex:1;"><div style="font-weight:700;font-size:0.875rem;${won ? '' : `color:${C.slate}`}">${a.label}</div>
@@ -929,42 +892,42 @@ function renderMgmt() {
                 ${won ? '<i class="fas fa-trophy" style="color:#eab308"></i>' : ''}
             </div>`;
         }
-        h += `<div class="m-block" style="font-weight:700;font-size:0.8rem;">${awardsWon.length} / ${AWARD_DEFS.length} awards won</div>`;
+        h += `<div class="m-block" style="font-weight:700;font-size:0.8rem;">${S.awardsWon.length} / ${AWARD_DEFS.length} awards won</div>`;
     }
 
     el.innerHTML = h;
 }
 
-function perceivedValue() { return Math.max(2, Math.round(rating / 22 + parkHappiness / 12 + Object.keys(rideQueues).length * 0.8)); }
+function perceivedValue() { return Math.max(2, Math.round(S.rating / 22 + S.parkHappiness / 12 + Object.keys(S.rideQueues).length * 0.8)); }
 function setAdmission(v) {
-    admissionPrice = parseInt(v, 10);
+    S.admissionPrice = parseInt(v, 10);
     const lbl = document.getElementById('price-label');
-    if (lbl) lbl.textContent = money(admissionPrice);
+    if (lbl) lbl.textContent = money(S.admissionPrice);
     saveGame();
 }
-function setResearchBudget(v) { research.budget = parseInt(v, 10); renderMgmt(); saveGame(); }
+function setResearchBudget(v) { S.research.budget = parseInt(v, 10); renderMgmt(); saveGame(); }
 
 function borrow(amount) {
-    if (loanBalance + amount > LOAN_LIMIT) { logEvent('Your credit limit is maxed out.', 'bad'); sfx('error'); return; }
-    loanBalance += amount;
+    if (S.loanBalance + amount > LOAN_LIMIT) { logEvent('Your credit limit is maxed out.', 'bad'); sfx('error'); return; }
+    S.loanBalance += amount;
     earn(amount, 'loans');
     logEvent(`Borrowed ${money(amount)}. Interest accrues daily.`, 'info');
     sfx('money'); updateUI(); renderMgmt(); saveGame();
 }
 function repay(amount) {
-    const pay = Math.min(amount, loanBalance);
+    const pay = Math.min(amount, S.loanBalance);
     if (pay <= 0) { logEvent('You have no outstanding loan.', 'info'); return; }
-    if (funds < pay) { logEvent('Not enough cash to make that repayment.', 'bad'); sfx('error'); return; }
-    loanBalance -= pay;
+    if (S.funds < pay) { logEvent('Not enough cash to make that repayment.', 'bad'); sfx('error'); return; }
+    S.loanBalance -= pay;
     spend(pay, 'loanRepaid');
     logEvent(`Repaid ${money(pay)} of your loan.`, 'good');
     updateUI(); renderMgmt(); saveGame();
 }
 function startCampaign(key) {
     const c = MARKETING_CAMPAIGNS[key];
-    if (funds < c.cost) { logEvent(`Not enough cash for the ${c.label}.`, 'bad'); sfx('error'); return; }
+    if (S.funds < c.cost) { logEvent(`Not enough cash for the ${c.label}.`, 'bad'); sfx('error'); return; }
     spend(c.cost, 'marketing');
-    marketing = { key, daysLeft: c.days };
+    S.marketing = { key, daysLeft: c.days };
     logEvent(`${c.label} launched! +${Math.round(c.boost * 100)}% attendance for ${c.days} days.`, 'good');
     sfx('money'); updateUI(); renderMgmt(); saveGame();
 }
@@ -991,7 +954,7 @@ let inspectedGuest = null;
 
 function guestAtScreen(sx, sy) {
     let best = null, bestD = 22;
-    for (const g of visualGuests) {
+    for (const g of S.visualGuests) {
         if (g.queuedAt) continue;
         const mx = g.x + (g.targetX - g.x) * g.progress;
         const my = g.y + (g.targetY - g.y) * g.progress;
@@ -1027,7 +990,7 @@ function bar(label, pct, color?, invert?) {
 function renderGuestStats() {
     if (!inspectedGuest) return;
     const g = inspectedGuest;
-    if (!visualGuests.includes(g)) { closeGuestPanel(); logEvent('That guest has left the park.', 'info'); return; }
+    if (!S.visualGuests.includes(g)) { closeGuestPanel(); logEvent('That guest has left the park.', 'info'); return; }
     const mood = g.happiness >= 80 ? ['Delighted', 'text-green-500'] : g.happiness >= 60 ? ['Happy', 'text-green-500']
                : g.happiness >= 40 ? ['Okay', 'text-yellow-500'] : g.happiness >= 20 ? ['Unhappy', 'text-orange-500'] : ['Furious', 'text-red-500'];
     document.getElementById('guest-name').textContent = g.name;
@@ -1049,7 +1012,7 @@ function renderGuestStats() {
 }
 
 function guestThought(g) {
-    if (g.queuedAt) return `I hope ${rideNames[g.queuedAt] || 'this ride'} is worth the wait...`;
+    if (g.queuedAt) return `I hope ${S.rideNames[g.queuedAt] || 'this ride'} is worth the wait...`;
     if (g.bladder > 88) return 'I really need to find a restroom.';
     if (g.thirst > 85) return 'I am so thirsty. Where are the drinks?';
     if (g.hunger > 85) return 'I could eat an entire funnel cake right now.';
@@ -1085,14 +1048,14 @@ function drawMinimap() {
     m.clearRect(0, 0, mc.width, mc.height);
     m.fillStyle = '#0b1220';
     m.fillRect(0, 0, mc.width, mc.height);
-    const cell = Math.min((mc.width - 8) / GRID_SIZE, (mc.height - 8) / GRID_SIZE);
-    const ox = (mc.width - cell * GRID_SIZE) / 2, oy = (mc.height - cell * GRID_SIZE) / 2;
+    const cell = Math.min((mc.width - 8) / S.gridSize, (mc.height - 8) / S.gridSize);
+    const ox = (mc.width - cell * S.gridSize) / 2, oy = (mc.height - cell * S.gridSize) / 2;
     // Land
     m.fillStyle = '#14532d';
-    m.fillRect(ox, oy, cell * GRID_SIZE, cell * GRID_SIZE);
-    for (let x = 0; x < GRID_SIZE; x++) {
-        for (let y = 0; y < GRID_SIZE; y++) {
-            const c = map[x][y];
+    m.fillRect(ox, oy, cell * S.gridSize, cell * S.gridSize);
+    for (let x = 0; x < S.gridSize; x++) {
+        for (let y = 0; y < S.gridSize; y++) {
+            const c = S.map[x][y];
             if (!c) continue;
             m.fillStyle = RIDE_TYPES.has(c) ? (RIDE_ACCENT[c] || '#a855f7') : (MINI_COLORS[c] || '#cbd5e1');
             m.fillRect(ox + x * cell, oy + y * cell, Math.max(1, cell), Math.max(1, cell));
@@ -1100,17 +1063,17 @@ function drawMinimap() {
     }
     // Guests
     m.fillStyle = 'rgba(255,255,255,0.85)';
-    for (const g of visualGuests) m.fillRect(ox + g.x * cell, oy + g.y * cell, Math.max(1, cell * 0.5), Math.max(1, cell * 0.5));
+    for (const g of S.visualGuests) m.fillRect(ox + g.x * cell, oy + g.y * cell, Math.max(1, cell * 0.5), Math.max(1, cell * 0.5));
     // Staff
-    for (const w of staff) {
+    for (const w of S.staff) {
         m.fillStyle = STAFF_KINDS[w.kind].color;
         m.fillRect(ox + w.x * cell, oy + w.y * cell, Math.max(1.5, cell * 0.6), Math.max(1.5, cell * 0.6));
     }
     // Viewport rectangle — invert the camera transform at the 4 screen corners
     const corners = [[0, 0], [canvas.width, 0], [canvas.width, canvas.height], [0, canvas.height]].map(([sx, sy]) => toMap(sx, sy));
     const xs = corners.map(c => c.x), ys = corners.map(c => c.y);
-    const x0 = Math.max(0, Math.min(...xs)), x1 = Math.min(GRID_SIZE, Math.max(...xs));
-    const y0 = Math.max(0, Math.min(...ys)), y1 = Math.min(GRID_SIZE, Math.max(...ys));
+    const x0 = Math.max(0, Math.min(...xs)), x1 = Math.min(S.gridSize, Math.max(...xs));
+    const y0 = Math.max(0, Math.min(...ys)), y1 = Math.min(S.gridSize, Math.max(...ys));
     m.strokeStyle = 'rgba(96,165,250,0.9)'; m.lineWidth = 1;
     m.strokeRect(ox + x0 * cell, oy + y0 * cell, (x1 - x0) * cell, (y1 - y0) * cell);
 }
@@ -1118,8 +1081,8 @@ function drawMinimap() {
 function minimapJump(e) {
     const mc = document.getElementById('minimap') as HTMLCanvasElement;
     const r = mc.getBoundingClientRect();
-    const cell = Math.min((mc.width - 8) / GRID_SIZE, (mc.height - 8) / GRID_SIZE);
-    const ox = (mc.width - cell * GRID_SIZE) / 2, oy = (mc.height - cell * GRID_SIZE) / 2;
+    const cell = Math.min((mc.width - 8) / S.gridSize, (mc.height - 8) / S.gridSize);
+    const ox = (mc.width - cell * S.gridSize) / 2, oy = (mc.height - cell * S.gridSize) / 2;
     const gx = ((e.clientX - r.left) * (mc.width / r.width) - ox) / cell;
     const gy = ((e.clientY - r.top) * (mc.height / r.height) - oy) / cell;
     // Center the camera on that tile
@@ -1130,14 +1093,14 @@ function minimapJump(e) {
 
 // ────── Objectives ──────
 const OBJECTIVES = [
-    { text: 'Connect a path to the entrance', reward: 250,  check: () => isParkOpen },
-    { text: 'Build your first ride',          reward: 500,  check: () => Object.keys(rideQueues).length > 0 },
-    { text: 'Reach 20 guests',                reward: 750,  check: () => guests >= 20 },
-    { text: 'Reach a park rating of 500',     reward: 1000, check: () => rating >= 500 },
-    { text: 'Sell 25 items at your shops',    reward: 1000, check: () => shopSales >= 25 },
-    { text: '75% happiness with 30+ guests',  reward: 1500, check: () => parkHappiness >= 75 && guests >= 30 },
-    { text: 'Reach $30,000 park value',       reward: 2500, check: () => funds + builtValue >= 30000 },
-    { text: 'Host 100 guests at once',        reward: 5000, check: () => guests >= 100 },
+    { text: 'Connect a path to the entrance', reward: 250,  check: () => S.isParkOpen },
+    { text: 'Build your first ride',          reward: 500,  check: () => Object.keys(S.rideQueues).length > 0 },
+    { text: 'Reach 20 guests',                reward: 750,  check: () => S.guests >= 20 },
+    { text: 'Reach a park rating of 500',     reward: 1000, check: () => S.rating >= 500 },
+    { text: 'Sell 25 items at your shops',    reward: 1000, check: () => S.shopSales >= 25 },
+    { text: '75% happiness with 30+ guests',  reward: 1500, check: () => S.parkHappiness >= 75 && S.guests >= 30 },
+    { text: 'Reach $30,000 park value',       reward: 2500, check: () => S.funds + S.builtValue >= 30000 },
+    { text: 'Host 100 guests at once',        reward: 5000, check: () => S.guests >= 100 },
 ];
 
 function renderObjectives() {
@@ -1146,8 +1109,8 @@ function renderObjectives() {
     list.innerHTML = '';
     OBJECTIVES.forEach((o, i) => {
         const row = document.createElement('div');
-        const done = i < objectiveIndex;
-        const current = i === objectiveIndex;
+        const done = i < S.objectiveIndex;
+        const current = i === S.objectiveIndex;
         row.className = 'flex items-start gap-2 text-[11px] ' + (done ? 'text-green-500' : current ? 'text-slate-800 dark:text-white font-bold' : 'text-slate-400 dark:text-gray-600');
         row.innerHTML = `<i class="fas ${done ? 'fa-check-circle' : current ? 'fa-bullseye' : 'fa-lock'} mt-0.5 text-[10px]"></i><span>${o.text} <span class="text-green-600 dark:text-green-400 font-normal">+$${o.reward.toLocaleString()}</span></span>`;
         list.appendChild(row);
@@ -1155,10 +1118,10 @@ function renderObjectives() {
 }
 
 function checkObjectives() {
-    while (objectiveIndex < OBJECTIVES.length && OBJECTIVES[objectiveIndex].check()) {
-        const o = OBJECTIVES[objectiveIndex];
+    while (S.objectiveIndex < OBJECTIVES.length && OBJECTIVES[S.objectiveIndex].check()) {
+        const o = OBJECTIVES[S.objectiveIndex];
         earn(o.reward, 'objectives');
-        objectiveIndex++;
+        S.objectiveIndex++;
         logEvent(`★ Objective complete: ${o.text}! Bonus: $${o.reward.toLocaleString()}`, 'good');
         fireworksActive = true;
         fireworksTimer = Math.max(fireworksTimer, 4);
@@ -1168,73 +1131,84 @@ function checkObjectives() {
 }
 
 // ────── Save / Load ──────
+// The field list is gone: saving is JSON.stringify(S). See save/schema.ts.
+
 function saveGame() {
-    try {
-        // Persist per-ride tallies so the inspector's lifetime numbers survive a reload
-        const rideMeta = {};
-        for (const k in rideQueues) {
-            rideMeta[k] = { riders: rideQueues[k].riders || 0, earned: rideQueues[k].earned || 0, breakdowns: rideQueues[k].breakdowns || 0 };
-        }
-        localStorage.setItem(SAVE_KEY, JSON.stringify({
-            v: 5, map, anchorOf, funds, rating, gameTime, dayCount,
-            gridSize: GRID_SIZE, landPurchased, builtValue, shopSales, objectiveIndex,
-            rideNames, shopStats, rideMeta,
-            litter, admissionPrice, loanBalance, marketing, research, awardsWon, lastAwardDay, ledger,
-            staff: staff.map(s => ({ kind: s.kind, name: s.name, x: s.x, y: s.y }))
-        }));
-    } catch (e) { /* private mode — no autosave */ }
+    saveToLocalStorage(S);
 }
 
-function loadGame() {
-    try {
-        const s = JSON.parse(localStorage.getItem(SAVE_KEY));
-        if (!s || s.v !== 5 || !Array.isArray(s.map)) return false;
-        GRID_SIZE = s.gridSize || 15;
-        map = s.map;
-        anchorOf = s.anchorOf || {};
-        funds = (typeof s.funds === 'number') ? s.funds : 10000;
-        rating = s.rating || 0;
-        gameTime = s.gameTime || 6;
-        dayCount = s.dayCount || 1;
-        landPurchased = s.landPurchased || 0;
-        builtValue = s.builtValue || 0;
-        shopSales = s.shopSales || 0;
-        objectiveIndex = s.objectiveIndex || 0;
-        rideNames = s.rideNames || {};
-        shopStats = s.shopStats || {};
-        litter = s.litter || {};
-        if (typeof s.admissionPrice === 'number') admissionPrice = s.admissionPrice;
-        loanBalance = s.loanBalance || 0;
-        marketing = s.marketing || { key: null, daysLeft: 0 };
-        if (s.research && Array.isArray(s.research.unlocked)) research = s.research;
-        awardsWon = s.awardsWon || [];
-        lastAwardDay = s.lastAwardDay || 0;
-        if (s.ledger && s.ledger.income) ledger = s.ledger;
-        if (Array.isArray(s.staff)) {
-            staff = s.staff.map(w => ({
-                kind: w.kind, name: w.name, x: w.x, y: w.y, tx: w.x, ty: w.y,
-                progress: 1, speed: 0.024 + Math.random() * 0.012, task: null, swing: Math.random() * 6,
-        route: null, reroute: 0, cleaned: 0, sweepFx: 0, lastX: -1, lastY: -1
-            })).filter(w => STAFF_KINDS[w.kind]);
+function loadGame(): boolean {
+    const loaded = loadFromLocalStorage();
+    if (!loaded) return false;
+    Object.assign(S, loaded);
+    return true;
+}
+
+/**
+ * JSON has no prototypes, so guests come back as plain objects and staff come
+ * back without their transient walk state.
+ *
+ * Separate from loadGame() because loadGame() runs at module line ~1240 while
+ * `class Guest` is declared ~150 lines further down and would still be in its
+ * temporal dead zone. Phase 4 removes the ordering problem by moving Guest into
+ * sim/guests.ts.
+ */
+function hydrateEntities() {
+    S.visualGuests = (S.visualGuests as any[]).map(
+        (g) => Object.assign(Object.create(Guest.prototype), g) as Guest,
+    );
+
+    // Staff keep identity and position; everything else is recomputed.
+    S.staff = (S.staff as any[])
+        .filter((w) => w && STAFF_KINDS[w.kind])
+        .map((w) => ({
+            ...w,
+            tx: w.x, ty: w.y, progress: 1,
+            speed: 0.024 + Math.random() * 0.012,
+            task: null, swing: Math.random() * 6,
+            route: null, reroute: 0, cleaned: w.cleaned || 0,
+            sweepFx: 0, lastX: -1, lastY: -1,
+        }));
+
+    reconcileRideQueues();
+}
+
+/**
+ * Make rideQueues agree with the map and with the guests.
+ *
+ * A save can disagree in three ways: a ride exists with no queue record (older
+ * saves only stored lifetime tallies), a queue record survives a ride that was
+ * bulldozed, or a guest's queuedAt points somewhere the counts do not reflect.
+ * Self-healing here beats trusting the file.
+ */
+function reconcileRideQueues() {
+    const anchors = new Set<string>();
+    for (let x = 0; x < S.gridSize; x++) {
+        for (let y = 0; y < S.gridSize; y++) {
+            const cell = S.map[x]?.[y];
+            if (!cell || !RIDE_TYPES.has(cell)) continue;
+            const a = S.anchorOf[`${x},${y}`];
+            if (a && (a.ax !== x || a.ay !== y)) continue;
+            const k = `${x},${y}`;
+            anchors.add(k);
+            S.rideQueues[k] ??= {
+                queue: 0, ridersOnBoard: 0, cycleTimer: 0, broken: false,
+                repairTimer: 0, riders: 0, earned: 0, breakdowns: 0,
+            };
         }
-        const meta = s.rideMeta || {};
-        // Rebuild ride queues from the map (anchors only), restoring tallies
-        for (let x = 0; x < GRID_SIZE; x++) {
-            for (let y = 0; y < GRID_SIZE; y++) {
-                const cell = map[x]?.[y];
-                if (cell && RIDE_TYPES.has(cell)) {
-                    const a = anchorOf[`${x},${y}`];
-                    if (!a || (a.ax === x && a.ay === y)) {
-                        const k = `${x},${y}`;
-                        const m = meta[k] || {};
-                        rideQueues[k] = { queue: 0, ridersOnBoard: 0, cycleTimer: 0, broken: false, repairTimer: 0,
-                                         riders: m.riders || 0, earned: m.earned || 0, breakdowns: m.breakdowns || 0 };
-                    }
-                }
-            }
-        }
-        return true;
-    } catch (e) { return false; }
+    }
+
+    for (const k of Object.keys(S.rideQueues)) {
+        if (!anchors.has(k)) delete S.rideQueues[k];
+    }
+
+    // Recount queues from the guests that actually claim to be in them.
+    for (const q of Object.values(S.rideQueues)) q.queue = 0;
+    for (const g of S.visualGuests as any[]) {
+        const q = g.queuedAt && S.rideQueues[g.queuedAt];
+        if (q) q.queue++;
+        else if (g.queuedAt) { g.queuedAt = null; g.queueTimer = 0; }
+    }
 }
 
 function newGame() {
@@ -1244,19 +1218,19 @@ function newGame() {
 }
 
 function buyLand() {
-    if (landPurchased >= LAND_COSTS.length) { logEvent('No more land available — the county said no.', 'bad'); return; }
-    const cost = LAND_COSTS[landPurchased];
-    if (funds < cost) { logEvent(`Land expansion costs $${cost.toLocaleString()}. Keep saving!`, 'bad'); return; }
+    if (S.landPurchased >= LAND_COSTS.length) { logEvent('No more land available — the county said no.', 'bad'); return; }
+    const cost = LAND_COSTS[S.landPurchased];
+    if (S.funds < cost) { logEvent(`Land expansion costs $${cost.toLocaleString()}. Keep saving!`, 'bad'); return; }
     spend(cost, 'land');
-    landPurchased++;
-    GRID_SIZE += 4;
-    for (let x = 0; x < GRID_SIZE; x++) {
-        if (!map[x]) map[x] = [];
-        for (let y = 0; y < GRID_SIZE; y++) {
-            if (map[x][y] === undefined) map[x][y] = null;
+    S.landPurchased++;
+    S.gridSize += 4;
+    for (let x = 0; x < S.gridSize; x++) {
+        if (!S.map[x]) S.map[x] = [];
+        for (let y = 0; y < S.gridSize; y++) {
+            if (S.map[x][y] === undefined) S.map[x][y] = null;
         }
     }
-    logEvent(`Land purchased! Park expanded to ${GRID_SIZE}×${GRID_SIZE}. (Scroll out to see it all.)`, 'good');
+    logEvent(`Land purchased! Park expanded to ${S.gridSize}×${S.gridSize}. (Scroll out to see it all.)`, 'good');
     updateLandButton();
     updateUI();
     saveGame();
@@ -1265,7 +1239,7 @@ function buyLand() {
 function updateLandButton() {
     const el = document.getElementById('land-cost');
     if (!el) return;
-    el.textContent = landPurchased >= LAND_COSTS.length ? 'SOLD OUT' : `$${LAND_COSTS[landPurchased].toLocaleString()}`;
+    el.textContent = S.landPurchased >= LAND_COSTS.length ? 'SOLD OUT' : `$${LAND_COSTS[S.landPurchased].toLocaleString()}`;
 }
 
 function setSpeed(s) {
@@ -1285,18 +1259,18 @@ function setSpeed(s) {
 // Initialize Map (fresh game) or restore save
 const restored = loadGame();
 if (!restored) {
-    for (let x = 0; x < GRID_SIZE; x++) {
-        map[x] = [];
-        for (let y = 0; y < GRID_SIZE; y++) {
-            map[x][y] = isEntranceTile(x, y) ? 'entrance' : null;
+    for (let x = 0; x < S.gridSize; x++) {
+        S.map[x] = [];
+        for (let y = 0; y < S.gridSize; y++) {
+            S.map[x][y] = isEntranceTile(x, y) ? 'entrance' : null;
         }
     }
 }
 // Guarantee the gate exists and is intact on every load (older saves included)
 for (const [ex, ey] of ENTRANCE_TILES) {
-    if (map[ex] && map[ex][ey] !== 'entrance') {
-        map[ex][ey] = 'entrance';
-        delete anchorOf[`${ex},${ey}`];
+    if (S.map[ex] && S.map[ex][ey] !== 'entrance') {
+        S.map[ex][ey] = 'entrance';
+        delete S.anchorOf[`${ex},${ey}`];
     }
 }
 setInterval(saveGame, 12000);
@@ -1317,7 +1291,7 @@ window.addEventListener('load', resize);
 
 function setTool(tool, btnElement) {
     if (!isUnlocked(tool)) {
-        const next = RESEARCH_ORDER.find(t => !research.unlocked.includes(t));
+        const next = RESEARCH_ORDER.find(t => !S.research.unlocked.includes(t));
         logEvent(`${TYPE_LABEL[tool] || tool} isn't researched yet.${next ? ` R&D is working on ${TYPE_LABEL[next]}.` : ''}`, 'bad');
         sfx('error');
         return;
@@ -1340,32 +1314,32 @@ function formatTime(h) {
 }
 
 function updateUI() {
-    document.getElementById('stat-funds').innerText = `$${funds.toLocaleString()}`;
-    document.getElementById('stat-guests').innerText = String(guests);
-    document.getElementById('stat-rating').innerText = String(rating);
-    document.getElementById('stat-happiness').innerText = `${Math.round(parkHappiness)}%`;
-    document.getElementById('stat-time').innerText = formatTime(gameTime);
+    document.getElementById('stat-funds').innerText = `$${S.funds.toLocaleString()}`;
+    document.getElementById('stat-guests').innerText = String(S.guests);
+    document.getElementById('stat-rating').innerText = String(S.rating);
+    document.getElementById('stat-happiness').innerText = `${Math.round(S.parkHappiness)}%`;
+    document.getElementById('stat-time').innerText = formatTime(S.gameTime);
     const dayEl = document.getElementById('stat-day');
-    if (dayEl) dayEl.innerText = `Day ${dayCount}`;
+    if (dayEl) dayEl.innerText = `Day ${S.dayCount}`;
     const clnEl = document.getElementById('stat-clean');
     if (clnEl) {
-        clnEl.innerText = `${Math.round(cleanliness)}%`;
-        clnEl.style.color = cleanliness > 80 ? '#14b8a6' : cleanliness > 50 ? '#f59e0b' : '#ef4444';
+        clnEl.innerText = `${Math.round(S.cleanliness)}%`;
+        clnEl.style.color = S.cleanliness > 80 ? '#14b8a6' : S.cleanliness > 50 ? '#f59e0b' : '#ef4444';
     }
     const valEl = document.getElementById('stat-value');
-    if (valEl) valEl.innerText = `$${(funds + builtValue).toLocaleString()}`;
+    if (valEl) valEl.innerText = `$${(S.funds + S.builtValue).toLocaleString()}`;
     const wEl = document.getElementById('stat-weather');
-    if (wEl) wEl.innerHTML = weather === 'clear'
+    if (wEl) wEl.innerHTML = S.weather === 'clear'
         ? '<i class="fas fa-sun text-yellow-500"></i>'
-        : weather === 'cloudy'
+        : S.weather === 'cloudy'
             ? '<i class="fas fa-cloud text-gray-400"></i>'
             : '<i class="fas fa-cloud-rain text-blue-400"></i>';
 
     const happEl = document.getElementById('stat-happiness');
-    if (parkHappiness >= 75) { happEl.classList.add('happy-high'); } else { happEl.classList.remove('happy-high'); }
+    if (S.parkHappiness >= 75) { happEl.classList.add('happy-high'); } else { happEl.classList.remove('happy-high'); }
 
     const statusEl = document.getElementById('stat-status');
-    if (isParkOpen) {
+    if (S.isParkOpen) {
         statusEl.innerText = "OPEN";
         statusEl.classList.replace('text-red-500', 'text-green-500');
     } else {
@@ -1374,7 +1348,7 @@ function updateUI() {
     }
 
     // Day/Night cycle — compute darkness level (used by canvas renderer)
-    const hour = gameTime % 24;
+    const hour = S.gameTime % 24;
     let nightAlpha = 0;
     if (hour >= 20 || hour < 5) {
         nightAlpha = 0.55;
@@ -1403,14 +1377,14 @@ function getSceneryBonusAt(ax, ay) {
     // Check a 3-tile radius around the anchor for scenery items
     let bonus = 0;
     const radius = 3;
-    const data = BUILD_DATA[map[ax]?.[ay]];
+    const data = BUILD_DATA[S.map[ax]?.[ay]];
     const sz = data ? data.size : 1;
     // Check around all tiles of the building
     for (let ox = -radius; ox < sz + radius; ox++) {
         for (let oy = -radius; oy < sz + radius; oy++) {
             const cx = ax + ox, cy = ay + oy;
-            if (cx < 0 || cx >= GRID_SIZE || cy < 0 || cy >= GRID_SIZE) continue;
-            const cell = map[cx][cy];
+            if (cx < 0 || cx >= S.gridSize || cy < 0 || cy >= S.gridSize) continue;
+            const cell = S.map[cx][cy];
             if (cell && SCENERY_TYPES.has(cell)) {
                 const sd = BUILD_DATA[cell];
                 bonus += sd.sceneryBonus;
@@ -1473,7 +1447,7 @@ class Guest {
         if (this.hunger > 85) this.happiness = Math.max(0, this.happiness - 0.02);
         if (this.thirst > 85) this.happiness = Math.max(0, this.happiness - 0.025);
         if (this.bladder > 90) this.happiness = Math.max(0, this.happiness - 0.03);
-        if (weather === 'rain') this.happiness = Math.max(0, this.happiness - 0.005);
+        if (S.weather === 'rain') this.happiness = Math.max(0, this.happiness - 0.005);
         // Filth is depressing; a bench underfoot is a nice rest
         const filth = litterAt(this.x, this.y);
         if (filth) this.happiness = Math.max(0, this.happiness - 0.02 * filth);
@@ -1484,7 +1458,7 @@ class Guest {
             if (this.queueTimer > 200) {
                 // Impatient — leave queue
                 this.happiness = Math.max(0, this.happiness - 15);
-                const q = rideQueues[this.queuedAt];
+                const q = S.rideQueues[this.queuedAt];
                 if (q) q.queue = Math.max(0, q.queue - 1);
                 this.queuedAt = null;
                 this.queueTimer = 0;
@@ -1500,8 +1474,8 @@ class Guest {
             const shopDirs = [[0,1],[1,0],[0,-1],[-1,0]];
             for (let d of shopDirs) {
                 const nx = this.x + d[0], ny = this.y + d[1];
-                if (nx < 0 || nx >= GRID_SIZE || ny < 0 || ny >= GRID_SIZE) continue;
-                const cell = map[nx][ny];
+                if (nx < 0 || nx >= S.gridSize || ny < 0 || ny >= S.gridSize) continue;
+                const cell = S.map[nx][ny];
                 if (cell && SHOP_TYPES.has(cell)) {
                     const sd = BUILD_DATA[cell];
                     let bought = false;
@@ -1512,15 +1486,15 @@ class Guest {
                     if (bought && this.money >= sd.price) {
                         earn(sd.price, 'shops');
                         this.money -= sd.price;
-                        shopSales++;
+                        S.shopSales++;
                         // Finishing a snack or drink creates litter
                         if (sd.shop === 'hunger' || sd.shop === 'thirst') dropLitter(this.x, this.y);
                         const sk = `${nx},${ny}`;
-                        if (!shopStats[sk]) shopStats[sk] = { sales: 0, earned: 0 };
-                        shopStats[sk].sales++;
-                        shopStats[sk].earned += sd.price;
+                        if (!S.shopStats[sk]) S.shopStats[sk] = { sales: 0, earned: 0 };
+                        S.shopStats[sk].sales++;
+                        S.shopStats[sk].earned += sd.price;
                         this.happiness = Math.min(100, this.happiness + 6);
-                        if (Math.random() > 0.85) logEvent(`A guest spent $${sd.price} at ${rideNames[sk] || cell}.`, 'good');
+                        if (Math.random() > 0.85) logEvent(`A guest spent $${sd.price} at ${S.rideNames[sk] || cell}.`, 'good');
                         break;
                     }
                 }
@@ -1531,13 +1505,13 @@ class Guest {
                 const dirs = [[0,1],[1,0],[0,-1],[-1,0]];
                 for (let d of dirs) {
                     const nx = this.x + d[0], ny = this.y + d[1];
-                    if (nx >= 0 && nx < GRID_SIZE && ny >= 0 && ny < GRID_SIZE) {
-                        const cell = map[nx][ny];
+                    if (nx >= 0 && nx < S.gridSize && ny >= 0 && ny < S.gridSize) {
+                        const cell = S.map[nx][ny];
                         if (cell && RIDE_TYPES.has(cell)) {
                             // Find anchor
-                            const key = anchorOf[`${nx},${ny}`];
+                            const key = S.anchorOf[`${nx},${ny}`];
                             const aKey = key ? `${key.ax},${key.ay}` : `${nx},${ny}`;
-                            const q = rideQueues[aKey];
+                            const q = S.rideQueues[aKey];
                             if (q && !q.broken && q.queue < BUILD_DATA[cell].capacity * 2) {
                                 q.queue++;
                                 this.queuedAt = aKey;
@@ -1550,7 +1524,7 @@ class Guest {
             }
 
             // Occasionally drop trash while strolling
-            if (Math.random() < 0.006 && map[this.x]?.[this.y] === 'path') dropLitter(this.x, this.y);
+            if (Math.random() < 0.006 && S.map[this.x]?.[this.y] === 'path') dropLitter(this.x, this.y);
 
             // Normal path wandering
             let neighbors = [];
@@ -1558,8 +1532,8 @@ class Guest {
             for (let d of dirs) {
                 let nx = this.x + d[0];
                 let ny = this.y + d[1];
-                if (nx >= 0 && nx < GRID_SIZE && ny >= 0 && ny < GRID_SIZE) {
-                    if (map[nx][ny] === 'path' || map[nx][ny] === 'entrance') {
+                if (nx >= 0 && nx < S.gridSize && ny >= 0 && ny < S.gridSize) {
+                    if (S.map[nx][ny] === 'path' || S.map[nx][ny] === 'entrance') {
                         neighbors.push({x: nx, y: ny});
                     }
                 }
@@ -1581,8 +1555,8 @@ class Guest {
             const dirs2 = [[0,1],[1,0],[0,-1],[-1,0],[1,1],[-1,1],[1,-1],[-1,-1]];
             for (let d of dirs2) {
                 const nx = this.x + d[0], ny = this.y + d[1];
-                if (nx >= 0 && nx < GRID_SIZE && ny >= 0 && ny < GRID_SIZE) {
-                    const cell = map[nx][ny];
+                if (nx >= 0 && nx < S.gridSize && ny >= 0 && ny < S.gridSize) {
+                    const cell = S.map[nx][ny];
                     if (cell && SCENERY_TYPES.has(cell)) {
                         this.happiness = Math.min(100, this.happiness + 0.3);
                     }
@@ -1594,7 +1568,7 @@ class Guest {
                 let hasLamp = false;
                 for (let d of dirs2) {
                     const nx = this.x + d[0], ny = this.y + d[1];
-                    if (nx >= 0 && nx < GRID_SIZE && ny >= 0 && ny < GRID_SIZE && map[nx][ny] === 'lamp') {
+                    if (nx >= 0 && nx < S.gridSize && ny >= 0 && ny < S.gridSize && S.map[nx][ny] === 'lamp') {
                         hasLamp = true; break;
                     }
                 }
@@ -1653,11 +1627,11 @@ class Guest {
 // ────── Ride Queue Processing ──────
 
 function processRideQueues() {
-    for (let key in rideQueues) {
-        const q = rideQueues[key];
+    for (let key in S.rideQueues) {
+        const q = S.rideQueues[key];
         const [ax, ay] = key.split(',').map(Number);
-        const type = map[ax]?.[ay];
-        if (!type || !RIDE_TYPES.has(type)) { delete rideQueues[key]; continue; }
+        const type = S.map[ax]?.[ay];
+        if (!type || !RIDE_TYPES.has(type)) { delete S.rideQueues[key]; continue; }
 
         const data = BUILD_DATA[type];
 
@@ -1668,7 +1642,7 @@ function processRideQueues() {
                 q.broken = false;
                 const bill = Math.ceil(data.cost * 0.08);
                 spend(bill, 'repairs');
-                logEvent(`${rideNames[key] || type} repaired — mechanic invoice: $${bill}.`, 'info');
+                logEvent(`${S.rideNames[key] || type} repaired — mechanic invoice: $${bill}.`, 'info');
             }
             continue;
         }
@@ -1676,9 +1650,9 @@ function processRideQueues() {
             q.broken = true;
             q.breakdowns = (q.breakdowns || 0) + 1;
             q.repairTimer = 20 + Math.random() * 25;
-            logEvent(`${rideNames[key] || type} broke down! A mechanic has been dispatched.`, 'bad');
+            logEvent(`${S.rideNames[key] || type} broke down! A mechanic has been dispatched.`, 'bad');
             // Everyone bails from the queue, annoyed
-            for (let g of visualGuests) {
+            for (let g of S.visualGuests) {
                 if (g.queuedAt === key) {
                     g.happiness = Math.max(0, g.happiness - 20);
                     g.queuedAt = null;
@@ -1701,7 +1675,7 @@ function processRideQueues() {
 
             // Boost happiness for riders
             let ridersProcessed = 0;
-            for (let g of visualGuests) {
+            for (let g of S.visualGuests) {
                 if (g.queuedAt === key && ridersProcessed < q.ridersOnBoard) {
                     g.happiness = Math.min(100, g.happiness + excitementTotal * 0.3);
                     g.ridesRidden++;
@@ -1719,7 +1693,7 @@ function processRideQueues() {
                 q.earned += revenue;
                 q.riders += ridersProcessed;
                 if (Math.random() > 0.7) {
-                    logEvent(`${rideNames[key] || type} earned $${revenue} from ${q.ridersOnBoard} riders!`, 'good');
+                    logEvent(`${S.rideNames[key] || type} earned $${revenue} from ${q.ridersOnBoard} riders!`, 'good');
                 }
             }
 
@@ -1741,24 +1715,24 @@ setInterval(() => {
 
 function economyTick() {
     // Advance time
-    gameTime = (gameTime + TIME_SPEED) % 24;
-    if (gameTime < TIME_SPEED) {
-        dayCount++;
-        logEvent(`— Day ${dayCount} begins —`, 'info');
+    S.gameTime = (S.gameTime + TIME_SPEED) % 24;
+    if (S.gameTime < TIME_SPEED) {
+        S.dayCount++;
+        logEvent(`— Day ${S.dayCount} begins —`, 'info');
         runDailyBooks();
     }
 
     // Weather roll
-    weatherTicks--;
-    if (weatherTicks <= 0) {
-        weatherTicks = 25 + Math.floor(Math.random() * 30);
-        const prev = weather;
+    S.weatherTicks--;
+    if (S.weatherTicks <= 0) {
+        S.weatherTicks = 25 + Math.floor(Math.random() * 30);
+        const prev = S.weather;
         const r = Math.random();
-        weather = r < 0.55 ? 'clear' : r < 0.8 ? 'cloudy' : 'rain';
-        if (weather !== prev) {
-            if (weather === 'rain') logEvent('Rain moves in — attendance will dip.', 'bad');
+        S.weather = r < 0.55 ? 'clear' : r < 0.8 ? 'cloudy' : 'rain';
+        if (S.weather !== prev) {
+            if (S.weather === 'rain') logEvent('Rain moves in — attendance will dip.', 'bad');
             else if (prev === 'rain') logEvent('The rain clears. Guests are coming back!', 'good');
-            else if (weather === 'cloudy') logEvent('Clouds drift over the park.', 'info');
+            else if (S.weather === 'cloudy') logEvent('Clouds drift over the park.', 'info');
         }
     }
 
@@ -1769,50 +1743,50 @@ function economyTick() {
     for (const [ex, ey] of ENTRANCE_TILES) {
         for (const d of dirs) {
             const nx = ex + d[0], ny = ey + d[1];
-            if (nx >= 0 && nx < GRID_SIZE && ny >= 0 && ny < GRID_SIZE && map[nx][ny] === 'path') {
+            if (nx >= 0 && nx < S.gridSize && ny >= 0 && ny < S.gridSize && S.map[nx][ny] === 'path') {
                 connected = true; break;
             }
         }
         if (connected) break;
     }
 
-    if (connected && !isParkOpen) {
-        isParkOpen = true;
+    if (connected && !S.isParkOpen) {
+        S.isParkOpen = true;
         logEvent('Path connected to Entrance! The park is now OPEN.', 'good');
-    } else if (!connected && isParkOpen) {
-        isParkOpen = false;
+    } else if (!connected && S.isParkOpen) {
+        S.isParkOpen = false;
         logEvent('Path to Entrance severed. The park is CLOSED.', 'bad');
     }
 
     // Night + weather arrival penalties
     const nightMultiplier = isNight ? 0.4 : 1.0;
-    const weatherMultiplier = weather === 'rain' ? 0.45 : weather === 'cloudy' ? 0.85 : 1.0;
+    const weatherMultiplier = S.weather === 'rain' ? 0.45 : S.weather === 'cloudy' ? 0.85 : 1.0;
 
-    if (isParkOpen) {
+    if (S.isParkOpen) {
         // Attendance = rating × happiness × night × weather × price appeal × marketing
-        const happinessMultiplier = 0.5 + (parkHappiness / 100) * 1.0;
+        const happinessMultiplier = 0.5 + (S.parkHappiness / 100) * 1.0;
         const pv = perceivedValue();
         // Cheap tickets draw crowds; overpricing empties the park
-        const priceMultiplier = admissionPrice <= pv
-            ? 1 + (pv - admissionPrice) * 0.05
-            : Math.max(0.08, 1 - (admissionPrice - pv) * 0.14);
-        const campaignMultiplier = marketing.key ? 1 + MARKETING_CAMPAIGNS[marketing.key].boost : 1;
-        const cleanMultiplier = 0.7 + (cleanliness / 100) * 0.3;
-        let targetGuests = Math.floor((rating / 3) * happinessMultiplier * nightMultiplier
+        const priceMultiplier = S.admissionPrice <= pv
+            ? 1 + (pv - S.admissionPrice) * 0.05
+            : Math.max(0.08, 1 - (S.admissionPrice - pv) * 0.14);
+        const campaignMultiplier = S.marketing.key ? 1 + MARKETING_CAMPAIGNS[S.marketing.key].boost : 1;
+        const cleanMultiplier = 0.7 + (S.cleanliness / 100) * 0.3;
+        let targetGuests = Math.floor((S.rating / 3) * happinessMultiplier * nightMultiplier
                                       * weatherMultiplier * priceMultiplier * campaignMultiplier * cleanMultiplier);
 
-        if (guests < targetGuests) {
+        if (S.guests < targetGuests) {
             const newGuests = Math.floor(Math.random() * 3) + 1;
-            guests += newGuests;
+            S.guests += newGuests;
             for (let i = 0; i < newGuests; i++) {
-                visualGuests.push(new Guest(ENTRANCE_X, ENTRANCE_Y));
+                S.visualGuests.push(new Guest(ENTRANCE_X, ENTRANCE_Y));
                 // Each arrival pays admission at the gate
-                if (admissionPrice > 0) earn(admissionPrice, 'admission');
+                if (S.admissionPrice > 0) earn(S.admissionPrice, 'admission');
             }
         }
-        if (guests > targetGuests && guests > 0) {
-            guests -= 1;
-            const leaver = visualGuests.pop();
+        if (S.guests > targetGuests && S.guests > 0) {
+            S.guests -= 1;
+            const leaver = S.visualGuests.pop();
             if (leaver && inspectedGuest === leaver) closeGuestPanel();
         }
 
@@ -1820,31 +1794,31 @@ function economyTick() {
         processRideQueues();
 
         // Calculate park happiness average
-        if (visualGuests.length > 0) {
+        if (S.visualGuests.length > 0) {
             let totalHappy = 0;
-            for (let g of visualGuests) totalHappy += g.happiness;
-            parkHappiness = totalHappy / visualGuests.length;
+            for (let g of S.visualGuests) totalHappy += g.happiness;
+            S.parkHappiness = totalHappy / S.visualGuests.length;
         }
 
         // Day/night flavor events
         if (isNight && Math.random() > 0.95) {
             logEvent('The park glows under the night sky...', 'info');
         }
-        const hour = Math.floor(gameTime);
-        if (hour === 6 && gameTime - hour < TIME_SPEED) {
+        const hour = Math.floor(S.gameTime);
+        if (hour === 6 && S.gameTime - hour < TIME_SPEED) {
             logEvent('Dawn breaks — guests are arriving!', 'good');
         }
-        if (hour === 19 && gameTime - hour < TIME_SPEED) {
+        if (hour === 19 && S.gameTime - hour < TIME_SPEED) {
             logEvent('Night falls over the park...', 'info');
         }
 
         // Midnight fireworks show!
-        if (hour === 0 && gameTime - hour < TIME_SPEED && !fireworksActive) {
+        if (hour === 0 && S.gameTime - hour < TIME_SPEED && !fireworksActive) {
             fireworksActive = true;
             fireworksTimer = FIREWORK_SHOW_TICKS;
             logEvent('✦ MIDNIGHT FIREWORKS! The sky lights up! ✦', 'good');
             // Big happiness boost for everyone watching
-            for (let g of visualGuests) {
+            for (let g of S.visualGuests) {
                 g.happiness = Math.min(100, g.happiness + 25);
             }
         }
@@ -1856,16 +1830,16 @@ function economyTick() {
                 fireworksActive = false;
                 logEvent('The fireworks finale dazzles the crowd!', 'good');
                 // Final happiness bump
-                for (let g of visualGuests) {
+                for (let g of S.visualGuests) {
                     g.happiness = Math.min(100, g.happiness + 10);
                 }
             }
         }
 
     } else {
-        if (guests > 0) {
-            guests = Math.max(0, guests - 5);
-            while (visualGuests.length > guests) visualGuests.pop();
+        if (S.guests > 0) {
+            S.guests = Math.max(0, S.guests - 5);
+            while (S.visualGuests.length > S.guests) S.visualGuests.pop();
         }
     }
 
@@ -1877,31 +1851,31 @@ function economyTick() {
 // ── Daily bookkeeping: wages, interest, research, campaigns, inspectors ──
 function runDailyBooks() {
     // Reset the day's snapshot
-    dayLedger = { income: { admission: 0, rides: 0, shops: 0, objectives: 0, loans: 0 },
+    S.dayLedger = { income: { admission: 0, rides: 0, shops: 0, objectives: 0, loans: 0 },
                   expense: { construction: 0, wages: 0, repairs: 0, interest: 0, marketing: 0, research: 0, land: 0, loanRepaid: 0 } };
 
     // Wages
     const wages = dailyWages();
     if (wages > 0) {
         spend(wages, 'wages');
-        if (funds < 0) logEvent(`Payroll of ${money(wages)} put you in the red!`, 'bad');
+        if (S.funds < 0) logEvent(`Payroll of ${money(wages)} put you in the red!`, 'bad');
     }
 
     // Loan interest
-    if (loanBalance > 0) {
-        const interest = Math.ceil(loanBalance * DAILY_INTEREST);
+    if (S.loanBalance > 0) {
+        const interest = Math.ceil(S.loanBalance * DAILY_INTEREST);
         spend(interest, 'interest');
         logEvent(`Loan interest charged: ${money(interest)}.`, 'info');
     }
 
     // Research progress
-    const nextTool = RESEARCH_ORDER.find(t => !research.unlocked.includes(t));
-    if (nextTool && research.budget > 0 && funds >= research.budget) {
-        spend(research.budget, 'research');
-        research.progress += research.budget / 6;
-        if (research.progress >= 100) {
-            research.progress = 0;
-            research.unlocked.push(nextTool);
+    const nextTool = RESEARCH_ORDER.find(t => !S.research.unlocked.includes(t));
+    if (nextTool && S.research.budget > 0 && S.funds >= S.research.budget) {
+        spend(S.research.budget, 'research');
+        S.research.progress += S.research.budget / 6;
+        if (S.research.progress >= 100) {
+            S.research.progress = 0;
+            S.research.unlocked.push(nextTool);
             refreshPalette();
             logEvent(`🔬 R&D breakthrough: ${TYPE_LABEL[nextTool]} is now available to build!`, 'good');
             sfx('award');
@@ -1909,22 +1883,22 @@ function runDailyBooks() {
     }
 
     // Marketing countdown
-    if (marketing.key) {
-        marketing.daysLeft--;
-        if (marketing.daysLeft <= 0) {
-            logEvent(`${MARKETING_CAMPAIGNS[marketing.key].label} has ended.`, 'info');
-            marketing = { key: null, daysLeft: 0 };
+    if (S.marketing.key) {
+        S.marketing.daysLeft--;
+        if (S.marketing.daysLeft <= 0) {
+            logEvent(`${MARKETING_CAMPAIGNS[S.marketing.key].label} has ended.`, 'info');
+            S.marketing = { key: null, daysLeft: 0 };
         }
     }
 
     // Inspectors every 3 days
-    if (dayCount - lastAwardDay >= 3) {
-        lastAwardDay = dayCount;
+    if (S.dayCount - S.lastAwardDay >= 3) {
+        S.lastAwardDay = S.dayCount;
         evaluateAwards();
     }
 
     // Bankruptcy warning
-    if (funds < -2000) logEvent('You are deep in debt. Consider a loan or raising prices.', 'bad');
+    if (S.funds < -2000) logEvent('You are deep in debt. Consider a loan or raising prices.', 'bad');
 
     renderMgmt();
     saveGame();
@@ -2224,7 +2198,7 @@ function drawParkFence() {
         ctx.fillStyle = postMat;
         ctx.fillRect(a.x - 0.9, a.y - 9, 1.8, 9);
     };
-    const N = GRID_SIZE;
+    const N = S.gridSize;
     for (let i = 0; i < N; i++) {
         // West edge — leave a gap across the three entrance rows
         if (i < ENTRANCE_Y - 1 || i > ENTRANCE_Y + 1) seg(-0.5, i - 0.5, -0.5, i + 0.5);
@@ -2297,7 +2271,7 @@ function drawTree(cx, cy) {
 }
 
 function drawTrashCan(cx, cy) {
-    const full = (litter[`${Math.round(cx)},${Math.round(cy)}`] || 0);
+    const full = (S.litter[`${Math.round(cx)},${Math.round(cy)}`] || 0);
     drawGroundShadow(cx, cy, 7);
     // Tapered bin with hoop bands
     ctx.fillStyle = '#3f4a5a';
@@ -3638,7 +3612,7 @@ function drawBreakdownSmoke(cx, cy) {
 // ── Rain overlay (screen-space) ──
 
 function drawRainFX() {
-    const target = weather === 'rain' ? 0.5 : 0;
+    const target = S.weather === 'rain' ? 0.5 : 0;
     rainAlpha += (target - rainAlpha) * 0.03;
     if (rainAlpha < 0.02) { rainDrops.length = 0; return; }
     while (rainDrops.length < 110) {
@@ -3661,14 +3635,14 @@ function drawRainFX() {
 
 function drawTooltip() {
     const { x, y } = hoveredCell;
-    if (x < 0 || y < 0 || x >= GRID_SIZE || y >= GRID_SIZE) return;
-    const cell = map[x]?.[y];
+    if (x < 0 || y < 0 || x >= S.gridSize || y >= S.gridSize) return;
+    const cell = S.map[x]?.[y];
     if (!cell || (!RIDE_TYPES.has(cell) && !SHOP_TYPES.has(cell))) return;
-    const a = anchorOf[`${x},${y}`] || { ax: x, ay: y };
+    const a = S.anchorOf[`${x},${y}`] || { ax: x, ay: y };
     const aKey = `${a.ax},${a.ay}`;
-    const lines = [(rideNames[aKey] || TYPE_LABEL[cell] || cell).toUpperCase()];
+    const lines = [(S.rideNames[aKey] || TYPE_LABEL[cell] || cell).toUpperCase()];
     if (RIDE_TYPES.has(cell)) {
-        const q = rideQueues[aKey];
+        const q = S.rideQueues[aKey];
         if (q) lines.push(q.broken ? 'BROKEN — mechanic en route' : `Queue: ${q.queue}  |  Riding: ${q.ridersOnBoard}`);
     } else {
         const sd = BUILD_DATA[cell];
@@ -4034,10 +4008,10 @@ function render() {
     // Every tile's floor: grass, path, or (at anchors) the full 2×2 pad.
     // Child tiles of 2×2 buildings draw NOTHING here — repainting them
     // after the anchor was exactly what clipped the structures.
-    for (let x = 0; x < GRID_SIZE; x++) {
-        for (let y = 0; y < GRID_SIZE; y++) {
-            const cell = map[x][y];
-            const anchor = anchorOf[`${x},${y}`];
+    for (let x = 0; x < S.gridSize; x++) {
+        for (let y = 0; y < S.gridSize; y++) {
+            const cell = S.map[x][y];
+            const anchor = S.anchorOf[`${x},${y}`];
             if (anchor && (anchor.ax !== x || anchor.ay !== y)) continue;
             const screenPos = toScreen(x, y);
             const csz = cell ? (BUILD_DATA[cell]?.size || 1) : 1;
@@ -4087,11 +4061,11 @@ function render() {
     // its front tile and nothing behind it can paint over it. Guests carry
     // their exact fractional position and weave behind/in front correctly.
     const drawables = [];
-    for (let x = 0; x < GRID_SIZE; x++) {
-        for (let y = 0; y < GRID_SIZE; y++) {
-            const cell = map[x][y];
+    for (let x = 0; x < S.gridSize; x++) {
+        for (let y = 0; y < S.gridSize; y++) {
+            const cell = S.map[x][y];
             if (!cell) continue;
-            const anchor = anchorOf[`${x},${y}`];
+            const anchor = S.anchorOf[`${x},${y}`];
             if (anchor && (anchor.ax !== x || anchor.ay !== y)) continue;
             const screenPos = toScreen(x, y);
             const sz = BUILD_DATA[cell]?.size || 1;
@@ -4111,7 +4085,7 @@ function render() {
                     else if (cell === 'gokarts') drawGoKarts(center.x, center.y);
                     else if (cell === 'megacoaster') drawMegaCoaster(center.x, center.y);
                     setPad(2);
-                    const q = rideQueues[aKey];
+                    const q = S.rideQueues[aKey];
                     if (q && q.queue > 0) drawRideQueue(x, y, q.queue, sz);
                     if (q && q.broken) drawBreakdownSmoke(center.x, center.y);
                 }});
@@ -4134,7 +4108,7 @@ function render() {
                     else if (cell === 'restroom') drawRestroom(screenPos.x, screenPos.y);
                     else if (cell === 'balloonstand') drawBalloonStand(screenPos.x, screenPos.y);
                     if (RIDE_TYPES.has(cell)) {
-                        const q = rideQueues[`${x},${y}`];
+                        const q = S.rideQueues[`${x},${y}`];
                         if (q && q.broken) drawBreakdownSmoke(screenPos.x, screenPos.y);
                         if (q && q.queue > 0) {
                             const dots = Math.min(q.queue, 8);
@@ -4153,7 +4127,7 @@ function render() {
     }
 
     // Guests join the same depth sort at their exact interpolated positions
-    visualGuests.forEach(guest => {
+    S.visualGuests.forEach(guest => {
         guest.update();
         const gd = (guest.x + (guest.targetX - guest.x) * guest.progress)
                  + (guest.y + (guest.targetY - guest.y) * guest.progress);
@@ -4176,7 +4150,7 @@ function render() {
     if (gameSpeed > 0) for (let i = 0; i < gameSpeed; i++) updateStaff();
 
     // Staff share the depth sort too
-    staff.forEach(w => {
+    S.staff.forEach(w => {
         const mx = w.x + (w.tx - w.x) * w.progress, my = w.y + (w.ty - w.y) * w.progress;
         drawables.push({ d: mx + my + 0.7, fn: () => drawStaffOne(w) });
     });
@@ -4191,9 +4165,9 @@ function render() {
     for (const dr of drawables) dr.fn();
 
     // Hover highlight — drawn after objects so the target tile always reads
-    if (hoveredCell.x >= 0 && hoveredCell.y >= 0 && hoveredCell.x < GRID_SIZE && hoveredCell.y < GRID_SIZE) {
+    if (hoveredCell.x >= 0 && hoveredCell.y >= 0 && hoveredCell.x < S.gridSize && hoveredCell.y < S.gridSize) {
         const hx = hoveredCell.x, hy = hoveredCell.y;
-        const hCell = map[hx][hy];
+        const hCell = S.map[hx][hy];
         const toolData = BUILD_DATA[currentTool];
         if (currentTool === 'bulldozer') {
             const sp = toScreen(hx, hy);
@@ -4203,15 +4177,15 @@ function render() {
             let fits = true;
             for (let dx = 0; dx < tsz && fits; dx++) {
                 for (let dy = 0; dy < tsz && fits; dy++) {
-                    if (hx + dx >= GRID_SIZE || hy + dy >= GRID_SIZE || map[hx + dx]?.[hy + dy] !== null) fits = false;
+                    if (hx + dx >= S.gridSize || hy + dy >= S.gridSize || S.map[hx + dx]?.[hy + dy] !== null) fits = false;
                 }
             }
             for (let dx = 0; dx < tsz; dx++) {
                 for (let dy = 0; dy < tsz; dy++) {
                     const px = hx + dx, py = hy + dy;
-                    if (px < GRID_SIZE && py < GRID_SIZE) {
+                    if (px < S.gridSize && py < S.gridSize) {
                         const sp = toScreen(px, py);
-                        const canPlace = map[px]?.[py] === null;
+                        const canPlace = S.map[px]?.[py] === null;
                         drawPoly(sp.x, sp.y, canPlace ? 'rgba(59, 130, 246, 0.4)' : 'rgba(239, 68, 68, 0.4)');
                     }
                 }
@@ -4289,7 +4263,7 @@ function handleInteraction(e) {
     mouseX = (clientX - rect.left) * (canvas.width / rect.width);
     mouseY = (clientY - rect.top) * (canvas.height / rect.height);
     const gridPos = toMap(mouseX, mouseY);
-    if (gridPos.x >= 0 && gridPos.x < GRID_SIZE && gridPos.y >= 0 && gridPos.y < GRID_SIZE) {
+    if (gridPos.x >= 0 && gridPos.x < S.gridSize && gridPos.y >= 0 && gridPos.y < S.gridSize) {
         hoveredCell = gridPos;
         if (isDragging || e.type === 'mousedown' || e.type === 'touchstart') {
             buildInCell(gridPos.x, gridPos.y);
@@ -4300,7 +4274,7 @@ function handleInteraction(e) {
 }
 
 function buildInCell(x, y) {
-    const currentCell = map[x][y];
+    const currentCell = S.map[x][y];
 
     // Protect Entrance
     if (currentCell === 'entrance') {
@@ -4313,53 +4287,53 @@ function buildInCell(x, y) {
         if (currentCell === null) return;
 
         // Find anchor for this tile
-        const aInfo = anchorOf[`${x},${y}`];
+        const aInfo = S.anchorOf[`${x},${y}`];
         if (aInfo) {
             const { ax, ay } = aInfo;
-            const type = map[ax][ay];
+            const type = S.map[ax][ay];
             const data = BUILD_DATA[type];
             if (!data) return;
 
             // Refund & clear all tiles
             const refund = Math.floor(data.cost * 0.5);
-            funds += refund;
-            rating -= data.rating;
-            builtValue = Math.max(0, builtValue - data.cost);
+            S.funds += refund;
+            S.rating -= data.rating;
+            S.builtValue = Math.max(0, S.builtValue - data.cost);
 
             const sz = data.size;
             const cleared = [];
             for (let dx = 0; dx < sz; dx++) {
                 for (let dy = 0; dy < sz; dy++) {
                     cleared.push({ x: ax + dx, y: ay + dy });
-                    map[ax+dx][ay+dy] = null;
-                    delete anchorOf[`${ax+dx},${ay+dy}`];
+                    S.map[ax+dx][ay+dy] = null;
+                    delete S.anchorOf[`${ax+dx},${ay+dy}`];
                 }
             }
             pushUndo({ kind: 'demolish', type, cells: cleared, cost: data.cost, refund,
-                       rating: data.rating, key: `${ax},${ay}`, name: rideNames[`${ax},${ay}`] });
+                       rating: data.rating, key: `${ax},${ay}`, name: S.rideNames[`${ax},${ay}`] });
             sfx('demolish');
             const dKey = `${ax},${ay}`;
-            logEvent(`Demolished "${rideNames[dKey] || type}". Refund: $${refund}`, 'info');
-            delete rideQueues[dKey];
-            delete rideNames[dKey];
-            delete shopStats[dKey];
+            logEvent(`Demolished "${S.rideNames[dKey] || type}". Refund: $${refund}`, 'info');
+            delete S.rideQueues[dKey];
+            delete S.rideNames[dKey];
+            delete S.shopStats[dKey];
             if (inspectedKey === dKey) closeRidePanel();
         } else {
             // Simple single-tile without anchor (path, etc.)
             if (currentCell === 'path') {
-                rating -= BUILD_DATA['path'].rating;
-                builtValue = Math.max(0, builtValue - BUILD_DATA['path'].cost);
+                S.rating -= BUILD_DATA['path'].rating;
+                S.builtValue = Math.max(0, S.builtValue - BUILD_DATA['path'].cost);
             } else if (BUILD_DATA[currentCell]) {
                 const refund = Math.floor(BUILD_DATA[currentCell].cost * 0.5);
-                funds += refund;
-                rating -= BUILD_DATA[currentCell].rating;
-                builtValue = Math.max(0, builtValue - BUILD_DATA[currentCell].cost);
+                S.funds += refund;
+                S.rating -= BUILD_DATA[currentCell].rating;
+                S.builtValue = Math.max(0, S.builtValue - BUILD_DATA[currentCell].cost);
             }
             const sKey = `${x},${y}`;
-            delete rideNames[sKey];
-            delete shopStats[sKey];
+            delete S.rideNames[sKey];
+            delete S.shopStats[sKey];
             if (inspectedKey === sKey) closeRidePanel();
-            map[x][y] = null;
+            S.map[x][y] = null;
         }
         updateUI();
         return;
@@ -4374,7 +4348,7 @@ function buildInCell(x, y) {
     for (let dx = 0; dx < sz; dx++) {
         for (let dy = 0; dy < sz; dy++) {
             const cx = x + dx, cy2 = y + dy;
-            if (cx >= GRID_SIZE || cy2 >= GRID_SIZE || map[cx]?.[cy2] !== null) {
+            if (cx >= S.gridSize || cy2 >= S.gridSize || S.map[cx]?.[cy2] !== null) {
                 if (!isDragging || currentTool !== 'path') {
                     if (sz > 1) logEvent(`Need a clear ${sz}×${sz} area to build ${currentTool}.`, 'bad');
                 }
@@ -4383,7 +4357,7 @@ function buildInCell(x, y) {
         }
     }
 
-    if (funds < toolData.cost) {
+    if (S.funds < toolData.cost) {
         if (!isDragging || currentTool !== 'path') {
             logEvent(`Insufficient funds for ${currentTool}.`, 'bad');
         }
@@ -4392,15 +4366,15 @@ function buildInCell(x, y) {
 
     // Place it
     spend(toolData.cost, 'construction');
-    rating += toolData.rating;
-    builtValue += toolData.cost;
+    S.rating += toolData.rating;
+    S.builtValue += toolData.cost;
 
     const placed = [];
     for (let dx = 0; dx < sz; dx++) {
         for (let dy = 0; dy < sz; dy++) {
             placed.push({ x: x + dx, y: y + dy });
-            map[x+dx][y+dy] = currentTool;
-            anchorOf[`${x+dx},${y+dy}`] = { ax: x, ay: y };
+            S.map[x+dx][y+dy] = currentTool;
+            S.anchorOf[`${x+dx},${y+dy}`] = { ax: x, ay: y };
         }
     }
     pushUndo({ kind: 'build', type: currentTool, cells: placed, cost: toolData.cost,
@@ -4410,13 +4384,13 @@ function buildInCell(x, y) {
     // Initialize ride queue + give it a name
     const newKey = `${x},${y}`;
     if (RIDE_TYPES.has(currentTool)) {
-        rideQueues[newKey] = { queue: 0, ridersOnBoard: 0, cycleTimer: 0, broken: false, repairTimer: 0, riders: 0, earned: 0, breakdowns: 0 };
-        rideNames[newKey] = nextName(currentTool);
-        logEvent(`"${rideNames[newKey]}" is now open! (${TYPE_LABEL[currentTool]})`, 'good');
+        S.rideQueues[newKey] = { queue: 0, ridersOnBoard: 0, cycleTimer: 0, broken: false, repairTimer: 0, riders: 0, earned: 0, breakdowns: 0 };
+        S.rideNames[newKey] = nextName(currentTool);
+        logEvent(`"${S.rideNames[newKey]}" is now open! (${TYPE_LABEL[currentTool]})`, 'good');
     } else if (SHOP_TYPES.has(currentTool)) {
-        shopStats[newKey] = { sales: 0, earned: 0 };
-        rideNames[newKey] = nextName(currentTool);
-        logEvent(`"${rideNames[newKey]}" is open for business!`, 'good');
+        S.shopStats[newKey] = { sales: 0, earned: 0 };
+        S.rideNames[newKey] = nextName(currentTool);
+        logEvent(`"${S.rideNames[newKey]}" is open for business!`, 'good');
     }
 
     checkObjectives();
@@ -4451,8 +4425,8 @@ canvas.addEventListener('mousedown', (e) => {
     }
     // Clicking an existing ride/shop inspects it instead of failing a build
     const gp = toMap(csx, csy);
-    if (currentTool !== 'bulldozer' && gp.x >= 0 && gp.y >= 0 && gp.x < GRID_SIZE && gp.y < GRID_SIZE) {
-        const cell = map[gp.x]?.[gp.y];
+    if (currentTool !== 'bulldozer' && gp.x >= 0 && gp.y >= 0 && gp.x < S.gridSize && gp.y < S.gridSize) {
+        const cell = S.map[gp.x]?.[gp.y];
         if (cell && (RIDE_TYPES.has(cell) || SHOP_TYPES.has(cell))) {
             openRidePanel(anchorKeyAt(gp.x, gp.y));
             return;
@@ -4481,7 +4455,7 @@ window.addEventListener('touchend', () => isDragging = false);
 const rideNameInput = document.getElementById('ride-name') as HTMLInputElement;
 rideNameInput.addEventListener('input', () => {
     if (!inspectedKey) return;
-    rideNames[inspectedKey] = rideNameInput.value.trim() || 'Unnamed';
+    S.rideNames[inspectedKey] = rideNameInput.value.trim() || 'Unnamed';
 });
 rideNameInput.addEventListener('change', saveGame);
 rideNameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') rideNameInput.blur(); });
@@ -4598,18 +4572,23 @@ document.addEventListener('input', (e) => dispatchAction(e, 'input'));
 // Dev-only: lets the smoke test assert that every data-act in the DOM resolves
 // to a handler. Stripped from production builds by the DEV constant.
 if (import.meta.env.DEV) {
-    (window as unknown as Record<string, unknown>).__ACTIONS__ = Object.keys(ACTIONS);
+    const w = window as unknown as Record<string, unknown>;
+    w.__ACTIONS__ = Object.keys(ACTIONS);
+    // Lets tests drive a save without waiting 12s for the autosave interval, and
+    // gives the browser console a handle on the live state object.
+    w.__GAME__ = { state: S, saveGame, loadGame };
 }
 
 // Start
 renderObjectives();
 updateLandButton();
 refreshPalette();
+if (restored) hydrateEntities();
 recomputeCleanliness();
 syncThemeIcon();
 document.getElementById('btn-minimap').classList.add('text-blue-500');
 if (restored) {
-    logEvent(`Park restored from autosave — welcome back to Day ${dayCount}.`, 'good');
+    logEvent(`Park restored from autosave — welcome back to Day ${S.dayCount}.`, 'good');
 } else {
     logEvent('Tip: press M for management, 1-9 for tools, B to bulldoze, Ctrl+Z to undo.', 'info');
 }
