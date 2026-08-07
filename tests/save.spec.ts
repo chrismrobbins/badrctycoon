@@ -107,7 +107,7 @@ test('a legacy v5 save is migrated, not discarded', async ({ page }) => {
   await page.goto('/');
 
   const s = await state(page);
-  expect(s.version).toBe(6);
+  expect(s.version).toBe(7);
   expect(s.funds).toBe(4242);
   expect(s.rating).toBe(137);
   expect(s.dayCount).toBe(9);
@@ -139,7 +139,7 @@ test('an unrecognised older save is recovered, not wiped', async ({ page }) => {
   const s = await state(page);
   expect(s.funds).toBe(777);
   expect(s.rating).toBe(42);
-  expect(s.version).toBe(6);
+  expect(s.version).toBe(7);
   await expect(page.locator('#stat-funds')).toHaveText('$777');
 });
 

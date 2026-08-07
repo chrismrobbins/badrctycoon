@@ -98,12 +98,23 @@ function fromLegacy(s: LegacySave): GameState {
  * the next -- no `break`, that is the point.
  */
 function upgrade(s: GameState): GameState {
-  /* eslint-disable no-fallthrough */
-  switch (s.version) {
-    // case 6: ...changes for v7...; s.version = 7;
-    default:
-      s.version = SAVE_VERSION;
+  // A ladder, not a switch: each step runs in order for any save old enough to
+  // need it, and adding v8 means appending one block. (A switch with fallthrough
+  // does the same job but trips noFallthroughCasesInSwitch and reads worse.)
+
+  if (s.version < 7) {
+    // v7 added ledger.income.refunds. Before it, demolition refunds bypassed the
+    // ledger entirely, so there is no historical figure to recover -- the old
+    // totals were already wrong. Start the bucket at zero.
+    for (const l of [s.ledger, s.dayLedger]) {
+      if (l?.income && typeof l.income.refunds !== 'number') l.income.refunds = 0;
+    }
+    s.version = 7;
   }
+
+  // if (s.version < 8) { ...; s.version = 8; }
+
+  s.version = SAVE_VERSION;
   return s;
 }
 

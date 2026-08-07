@@ -17,10 +17,10 @@
 
 /** Bump on any shape change and add a migration. See migrations.ts -- the loader
  *  must never reject an old save, only upgrade it. */
-export const SAVE_VERSION = 6;
+export const SAVE_VERSION = 7;
 
 export interface Ledger {
-  income: { admission: number; rides: number; shops: number; objectives: number; loans: number };
+  income: { admission: number; rides: number; shops: number; objectives: number; loans: number; refunds: number };
   expense: {
     construction: number; wages: number; repairs: number; interest: number;
     marketing: number; research: number; land: number; loanRepaid: number;
@@ -133,9 +133,9 @@ export interface GameState {
   staff: any[];
 }
 
-function emptyLedger(): Ledger {
+export function emptyLedger(): Ledger {
   return {
-    income: { admission: 0, rides: 0, shops: 0, objectives: 0, loans: 0 },
+    income: { admission: 0, rides: 0, shops: 0, objectives: 0, loans: 0, refunds: 0 },
     expense: {
       construction: 0, wages: 0, repairs: 0, interest: 0,
       marketing: 0, research: 0, land: 0, loanRepaid: 0,

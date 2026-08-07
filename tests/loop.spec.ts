@@ -143,7 +143,11 @@ test('simulated time never outpaces wall-clock time at normal speed', async ({ p
   await page.goto('/');
   await setSpeed(page, 1);
 
-  const t0 = { sim: await simClock(page), wall: Date.now() };
+  // Read wall first and sim second here, then the reverse at the end, so the
+  // wall window strictly encloses the sim window. Measuring the other way round
+  // lets the evaluate() round-trip show up as sim time that "outran" wall time.
+  const wall0 = Date.now();
+  const sim0 = await simClock(page);
 
   const other = await context.newPage();
   await other.goto('about:blank');
@@ -152,8 +156,8 @@ test('simulated time never outpaces wall-clock time at normal speed', async ({ p
   await page.bringToFront();
   await page.waitForTimeout(200);
 
-  const simElapsed = (await simClock(page)) - t0.sim;
-  const wallElapsed = Date.now() - t0.wall;
+  const simElapsed = (await simClock(page)) - sim0;
+  const wallElapsed = Date.now() - wall0;
 
-  expect(simElapsed).toBeLessThanOrEqual(wallElapsed + 100);
+  expect(simElapsed).toBeLessThanOrEqual(wallElapsed);
 });

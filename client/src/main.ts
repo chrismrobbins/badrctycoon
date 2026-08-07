@@ -1,6 +1,7 @@
 import './styles/app.css';
-import { createGameState, type RideQueue } from './core/state';
+import { createGameState, emptyLedger, type RideQueue } from './core/state';
 import { SAVE_KEY, loadFromLocalStorage, saveToLocalStorage } from './save/schema';
+import * as Fin from './sim/finance';
 // One source of truth for every buildable thing. These were nine hand-synced
 // tables in the monolith; they are all derived from content/ now.
 import {
@@ -258,19 +259,13 @@ const MARKETING_CAMPAIGNS = {
 
 function isUnlocked(tool) { return tool === 'bulldozer' || S.research.unlocked.includes(tool); }
 
-// Ledger — accumulates all-time, plus a per-day snapshot for the report
-
-function earn(amount, bucket) {
-    S.funds += amount;
-    S.ledger.income[bucket] = (S.ledger.income[bucket] || 0) + amount;
-    S.dayLedger.income[bucket] = (S.dayLedger.income[bucket] || 0) + amount;
-}
-function spend(amount, bucket) {
-    S.funds -= amount;
-    S.ledger.expense[bucket] = (S.ledger.expense[bucket] || 0) + amount;
-    S.dayLedger.expense[bucket] = (S.dayLedger.expense[bucket] || 0) + amount;
-}
-const sumOf = (o) => (Object.values(o) as number[]).reduce((a, b) => a + b, 0);
+// Ledger — sim/finance.ts is the only thing allowed to write S.funds. These are
+// thin bindings so the ~40 existing call sites keep reading the same.
+const earn = (amount: number, bucket: Fin.IncomeBucket) => Fin.earn(S, amount, bucket);
+const spend = (amount: number, bucket: Fin.ExpenseBucket) => Fin.spend(S, amount, bucket);
+const unearn = (amount: number, bucket: Fin.IncomeBucket) => Fin.unearn(S, amount, bucket);
+const unspend = (amount: number, bucket: Fin.ExpenseBucket) => Fin.unspend(S, amount, bucket);
+const sumOf = Fin.sumOf;
 
 // ── Litter ──
 function litterAt(x, y) { return S.litter[`${x},${y}`] || 0; }
@@ -601,7 +596,7 @@ function undoLast() {
     if (e.kind === 'build') {
         // Remove what was built and refund the full cost
         for (const c of e.cells) { S.map[c.x][c.y] = null; delete S.anchorOf[`${c.x},${c.y}`]; }
-        S.funds += e.cost;
+        unspend(e.cost, 'construction');   // reverse the build; do not book it as income
         S.builtValue = Math.max(0, S.builtValue - e.cost);
         S.rating -= e.rating;
         delete S.rideQueues[e.key];
@@ -615,7 +610,7 @@ function undoLast() {
             S.map[c.x][c.y] = e.type;
             if (e.cells.length > 1) S.anchorOf[`${c.x},${c.y}`] = { ax: e.cells[0].x, ay: e.cells[0].y };
         }
-        S.funds -= e.refund;
+        unearn(e.refund, 'refunds');        // reverse the demolition refund
         S.builtValue += e.cost;
         S.rating += e.rating;
         if (RIDE_TYPES.has(e.type)) {
@@ -750,6 +745,7 @@ function renderMgmt() {
                 ${row('Shop sales', money(S.ledger.income.shops))}
                 ${row('Objective bonuses', money(S.ledger.income.objectives))}
                 ${row('Loans drawn', money(S.ledger.income.loans))}
+                        ${row('Demolition refunds', money(S.ledger.income.refunds))}
                 ${row('Total', money(inc), C.green)}</div>
             <div><div class="m-sec" style="color:${C.red}">Expenses (all time)</div>
                 ${row('Construction', money(S.ledger.expense.construction))}
@@ -1856,8 +1852,7 @@ function economyTick() {
 // ── Daily bookkeeping: wages, interest, research, campaigns, inspectors ──
 function runDailyBooks() {
     // Reset the day's snapshot
-    S.dayLedger = { income: { admission: 0, rides: 0, shops: 0, objectives: 0, loans: 0 },
-                  expense: { construction: 0, wages: 0, repairs: 0, interest: 0, marketing: 0, research: 0, land: 0, loanRepaid: 0 } };
+    S.dayLedger = emptyLedger();   // one definition, in core/state.ts
 
     // Wages
     const wages = dailyWages();
@@ -4319,7 +4314,7 @@ function buildInCell(x, y) {
 
             // Refund & clear all tiles
             const refund = Math.floor(data.cost * 0.5);
-            S.funds += refund;
+            earn(refund, 'refunds');
             S.rating -= data.rating;
             S.builtValue = Math.max(0, S.builtValue - data.cost);
 
@@ -4348,7 +4343,7 @@ function buildInCell(x, y) {
                 S.builtValue = Math.max(0, S.builtValue - BUILD_DATA['path'].cost);
             } else if (BUILD_DATA[currentCell]) {
                 const refund = Math.floor(BUILD_DATA[currentCell].cost * 0.5);
-                S.funds += refund;
+                earn(refund, 'refunds');
                 S.rating -= BUILD_DATA[currentCell].rating;
                 S.builtValue = Math.max(0, S.builtValue - BUILD_DATA[currentCell].cost);
             }
