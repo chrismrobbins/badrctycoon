@@ -3,8 +3,11 @@
 For whoever builds `server/`. The client side of phases 0–5 is done and committed;
 this is what it expects from the API, and what the API must not take on trust.
 
-Read [ARCHITECTURE.md](ARCHITECTURE.md) §5–§6 first for the reasoning. This
-document is the interface.
+New to this? Read [BACKEND-HANDOFF.md](BACKEND-HANDOFF.md) first — it covers getting
+the repo running, build order, and the traps. [ARCHITECTURE.md](ARCHITECTURE.md)
+§5–§6 has the reasoning behind the trust model and save design.
+
+This document is the interface, and it wins over both of those if they disagree.
 
 ---
 

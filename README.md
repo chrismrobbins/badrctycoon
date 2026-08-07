@@ -42,7 +42,8 @@ tested against a fake server in `tests/sync.spec.ts`. Neither has talked to a re
 Missing on this side: `ui/auth.ts` — the login form, slot picker and conflict dialog that would
 drive the engine.
 
-[docs/API-CONTRACT.md](docs/API-CONTRACT.md) is the handoff: endpoints, the save
+**Picking up the server? Start at [docs/BACKEND-HANDOFF.md](docs/BACKEND-HANDOFF.md)** --
+orientation, build order and traps. [docs/API-CONTRACT.md](docs/API-CONTRACT.md) is the spec: endpoints, the save
 blob shape, optimistic concurrency, and the invariants the server must check rather than
 trust. `core/`, `content/`, `sim/finance` and `save/migrations` are proven Node-importable
 (`tests/portability.spec.ts`), so the server should reuse them instead of restating the
