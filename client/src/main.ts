@@ -74,6 +74,28 @@ let mouseX = 0, mouseY = 0;
 let hoveredCell = { x: -1, y: -1 };
 let isDragging = false;
 
+// ── The clock ──
+// One clock, not three. The monolith ran the economy on a 1.5s setInterval while
+// guests and staff updated inside requestAnimationFrame -- so the simulation ran
+// at the display's refresh rate (guests moved 2.4x faster on a 144Hz monitor),
+// staff advanced `gameSpeed` times per FRAME while guests advanced once, and
+// setSpeed(0) never stopped guests at all: a "paused" park kept walking,
+// littering and earning shop revenue.
+//
+// Now every one of those derives from simulated time, which only advances when
+// gameSpeed > 0.
+const TICK_MS = 1000 / 60;        // one entity step; 60Hz matches the old feel at 60fps
+const ECONOMY_TICK_MS = 1500;     // unchanged
+const MAX_CATCHUP_MS = 250;       // a backgrounded tab must not fast-forward the park
+const MAX_STEPS_PER_FRAME = 120;  // bail out rather than spiral if a frame runs long
+
+/** Milliseconds of simulated time. Drives every animation, so pause freezes them
+ *  and the same tick always renders the same frame. */
+let simClock = 0;
+let tickAccumulator = 0;
+let economyAccumulator = 0;
+let lastFrameAt = 0;
+
 // Day/Night Cycle
 const TIME_SPEED = 0.15; // hours per economy tick (1.5s)
 let isNight = false;     // derived from S.gameTime each updateUI()
@@ -476,7 +498,7 @@ function drawStaffOne(w) {
     // Tool of the trade
     ctx.strokeStyle = '#78716c'; ctx.lineWidth = 1;
     if (w.kind === 'janitor') {
-        const sw = Math.sin(Date.now() * 0.008 + w.swing) * 2;
+        const sw = Math.sin(simClock * 0.008 + w.swing) * 2;
         ctx.beginPath(); ctx.moveTo(p.x + 2, yy - 2); ctx.lineTo(p.x + 5 + sw, yy + 4); ctx.stroke();
         ctx.fillStyle = '#eab308';
         ctx.fillRect(p.x + 4 + sw, yy + 3.5, 3, 1.6);
@@ -490,7 +512,7 @@ function drawStaffOne(w) {
         ctx.beginPath(); ctx.moveTo(p.x + 2.5, yy - 2); ctx.lineTo(p.x + 5, yy - 9); ctx.stroke();
         ctx.fillStyle = '#f472b6';
         ctx.beginPath(); ctx.arc(p.x + 5.2, yy - 11, 2.4, 0, Math.PI * 2); ctx.fill();
-        if (Math.sin(Date.now() * 0.006 + w.swing) > 0.7) {
+        if (Math.sin(simClock * 0.006 + w.swing) > 0.7) {
             ctx.fillStyle = '#fde047';
             ctx.beginPath(); ctx.arc(p.x - 4, yy - 8, 1, 0, Math.PI * 2); ctx.fill();
         }
@@ -1583,7 +1605,7 @@ class Guest {
 
         // Balloon on a string
         if (this.hasBalloon) {
-            const bob = Math.sin(Date.now() * 0.003 + this.x * 7) * 1.5;
+            const bob = Math.sin(simClock * 0.003 + this.x * 7) * 1.5;
             ctx.strokeStyle = 'rgba(148,163,184,0.7)';
             ctx.lineWidth = 0.5;
             ctx.beginPath();
@@ -1692,13 +1714,9 @@ function processRideQueues() {
     }
 }
 
-// ────── Economy Loop (1.5s tick, speed-aware) ──────
-
-setInterval(() => {
-    if (document.hidden || gameSpeed === 0) return;
-    for (let i = 0; i < gameSpeed; i++) economyTick();
-    updateUI();
-}, 1500);
+// ────── Economy Loop ──────
+// Driven by the fixed-timestep loop at the bottom of this file, not its own
+// setInterval. economyTick() itself is unchanged.
 
 function economyTick() {
     // Advance time
@@ -1830,7 +1848,7 @@ function economyTick() {
         }
     }
 
-    // NOTE: updateStaff() runs in the render loop, not here — see its comment.
+    // Guests, staff and FX advance in simTick(); this is the slow tick.
     recomputeCleanliness();
     checkObjectives();
 }
@@ -2038,7 +2056,7 @@ function drawEntrance(cx, cy) {
     const alen = Math.hypot(ax, ay);
     const ux = ax / alen, uy = ay / alen;
 
-    const t = Date.now() * 0.003;
+    const t = simClock * 0.003;
 
     // Draws one ticket kiosk. `flip` mirrors the window side so the pair reads
     // as facing each other across the gateway.
@@ -2162,7 +2180,7 @@ function drawEntrance(cx, cy) {
             const k = i / 12, v = 1 - k;
             const px = v * v * springB.x + 2 * v * k * cx + k * k * springF.x;
             const py = v * v * (springB.y - 6) + 2 * v * k * (apexY - 4) + k * k * (springF.y - 6);
-            const lit = (Math.floor(Date.now() * 0.004 + i) % 3) !== 0;
+            const lit = (Math.floor(simClock * 0.004 + i) % 3) !== 0;
             ctx.fillStyle = lit ? (i % 2 ? '#fef08a' : '#fb7185') : 'rgba(148,163,184,0.5)';
             if (lit) { ctx.shadowBlur = 7; ctx.shadowColor = ctx.fillStyle; }
             ctx.beginPath(); ctx.arc(px, py, 1.6, 0, Math.PI * 2); ctx.fill();
@@ -2199,7 +2217,7 @@ function drawTree(cx, cy) {
     drawGroundShadow(cx, cy, 13);
     const h = tileHash(cx, cy);
     const variant = Math.floor(h * 3);           // 3 deterministic species
-    const sway = Math.sin(Date.now() * 0.0009 + cx * 0.1) * 1.6;
+    const sway = Math.sin(simClock * 0.0009 + cx * 0.1) * 1.6;
     // Root flare + tapered trunk
     ctx.fillStyle = '#57430f';
     ctx.beginPath(); ctx.ellipse(cx, cy, 5, 2.2, 0, 0, Math.PI * 2); ctx.fill();
@@ -2342,7 +2360,7 @@ function drawFlowerBed(cx, cy) {
         ctx.beginPath(); ctx.moveTo(cx - 18 + i * 3, gy + i * 2); ctx.lineTo(cx + 18 + i * 3, gy + i * 2); ctx.stroke();
     }
     // Flower clusters — deterministic layout, gentle sway
-    const t = Date.now() * 0.0015;
+    const t = simClock * 0.0015;
     const cols = ['#ec4899', '#eab308', '#3b82f6', '#a855f7', '#ef4444', '#f97316'];
     for (let i = 0; i < 9; i++) {
         const hh = tileHash(cx + i * 13, cy - i * 7);
@@ -2405,7 +2423,7 @@ function drawLamp(cx, cy) {
         g.addColorStop(1, 'rgba(254,240,138,0)');
         ctx.fillStyle = g;
         ctx.beginPath(); ctx.arc(cx, gy - 31, 16, 0, Math.PI * 2); ctx.fill();
-        const mt = Date.now() * 0.004;
+        const mt = simClock * 0.004;
         ctx.fillStyle = 'rgba(226,232,240,0.6)';
         for (let i = 0; i < 2; i++) {
             ctx.beginPath();
@@ -2421,7 +2439,7 @@ function drawFountain(cx, cy) {
     // Basin with water
     ctx.beginPath(); ctx.ellipse(cx, cy - 2, 14, 6, 0, 0, Math.PI * 2); ctx.fillStyle = '#94a3b8'; ctx.fill();
     ctx.beginPath(); ctx.ellipse(cx, cy - 3, 12, 5, 0, 0, Math.PI * 2); ctx.fillStyle = '#3b82f6'; ctx.fill();
-    const t = Date.now() * 0.005;
+    const t = simClock * 0.005;
     // Water shimmer
     ctx.fillStyle = 'rgba(191, 219, 254, 0.6)';
     for (let i = 0; i < 3; i++) {
@@ -2460,7 +2478,7 @@ function drawCarousel(cx, cy) {
     ctx.beginPath(); ctx.ellipse(cx, gy - 6, 24, 9, 0, 0, Math.PI * 2);
     ctx.strokeStyle = '#fef3c7'; ctx.lineWidth = 1.5; ctx.stroke();
     // Platform sunburst
-    const t = Date.now() * 0.001;
+    const t = simClock * 0.001;
     ctx.strokeStyle = 'rgba(255,255,255,0.28)'; ctx.lineWidth = 1;
     for (let i = 0; i < 10; i++) {
         const a = t + i * Math.PI / 5;
@@ -2531,7 +2549,7 @@ function drawTeaCups(cx, cy) {
     drawPadFence(cx, cy - 4, 0.98, '#f9a8d4', 'rgba(249,168,212,0.45)');
     setPad(2);
     const gy = cy - 4;
-    const t = Date.now() * 0.001;
+    const t = simClock * 0.001;
 
     // Spinning platter with pinwheel pattern
     ctx.beginPath(); ctx.ellipse(cx, gy - 3, 24, 10, 0, 0, Math.PI * 2); ctx.fillStyle = '#be185d'; ctx.fill();
@@ -2601,7 +2619,7 @@ function drawBumperCars(cx, cy) {
     drawIsoDeck(cx, cy, 0.98, '#475569', '#2b3547', 4);
     setPad(2);
     const gy = cy - 4;
-    const t = Date.now() * 0.002;
+    const t = simClock * 0.002;
 
     // Polished arena floor with reflective sheen
     ctx.fillStyle = '#1e293b';
@@ -2708,7 +2726,7 @@ function drawDropTower(cx, cy) {
     ctx.fillStyle = '#dc2626';
     ctx.beginPath(); ctx.roundRect(cx - 9, topY - 8, 18, 9, 2); ctx.fill();
     ctx.fillStyle = '#7f1d1d'; ctx.fillRect(cx - 9, topY - 1, 18, 2);
-    if (Math.sin(Date.now() * 0.005) > 0) {
+    if (Math.sin(simClock * 0.005) > 0) {
         ctx.fillStyle = '#fca5a5';
         ctx.shadowBlur = 10; ctx.shadowColor = '#ef4444';
         ctx.beginPath(); ctx.arc(cx, topY - 11, 2.2, 0, Math.PI * 2); ctx.fill();
@@ -2717,7 +2735,7 @@ function drawDropTower(cx, cy) {
 
     // Drop cycle: climb, hang, plummet, settle
     const cycle = 6000;
-    const t = (Date.now() % cycle) / cycle;
+    const t = (simClock % cycle) / cycle;
     let ringY = 0;
     if (t < 0.5) ringY = t * 2;
     else if (t < 0.6) ringY = 1;
@@ -2761,7 +2779,7 @@ function drawDropTower(cx, cy) {
     // Tower lights at night
     if (isNight) {
         for (let i = 0; i < 9; i++) {
-            ctx.fillStyle = (Math.floor(Date.now() * 0.004 + i) % 2) ? '#fef08a' : '#7dd3fc';
+            ctx.fillStyle = (Math.floor(simClock * 0.004 + i) % 2) ? '#fef08a' : '#7dd3fc';
             ctx.shadowBlur = 5; ctx.shadowColor = ctx.fillStyle;
             ctx.beginPath(); ctx.arc(cx - 7.5, gy - 14 - i * 10, 1.3, 0, Math.PI * 2); ctx.fill();
             ctx.beginPath(); ctx.arc(cx + 7.5, gy - 14 - i * 10, 1.3, 0, Math.PI * 2); ctx.fill();
@@ -2799,7 +2817,7 @@ function drawSwingingShip(cx, cy) {
     ctx.fillStyle = '#94a3b8'; ctx.fillRect(cx - 36, gy - 32, 72, 4);
     ctx.fillStyle = '#64748b'; ctx.fillRect(cx - 22, gy - 52, 44, 3);
 
-    const t = Date.now() * 0.002;
+    const t = simClock * 0.002;
     const angle = Math.sin(t) * Math.PI / 2.9;
     ctx.save();
     ctx.translate(cx, apex);
@@ -2919,7 +2937,7 @@ function drawHauntedHouse(cx, cy) {
     });
 
     // Flickering windows
-    const flick = (o, sp) => Math.sin(Date.now() * sp + o) > -0.2;
+    const flick = (o, sp) => Math.sin(simClock * sp + o) > -0.2;
     const litWin = (wx, wy, w, h, o, sp) => {
         const on = flick(o, sp);
         ctx.fillStyle = on ? '#fbbf24' : '#111827';
@@ -2970,7 +2988,7 @@ function drawHauntedHouse(cx, cy) {
 
     // Bats at night
     if (isNight) {
-        const bt = Date.now() * 0.003;
+        const bt = simClock * 0.003;
         for (let i = 0; i < 6; i++) {
             const bx = cx + Math.sin(bt + i * 1.7) * 48;
             const by = wallTop - 44 + Math.cos(bt * 0.7 + i * 1.3) * 16;
@@ -2996,7 +3014,7 @@ function drawFerrisWheel(cx, cy) {
     const gy = cy - 4;
     const wheelR = 56;
     const hubY = gy - 66;
-    const t = Date.now() * 0.0005;
+    const t = simClock * 0.0005;
 
     // Boarding platform under the wheel (front of the pad)
     ctx.fillStyle = '#1e293b';
@@ -3075,7 +3093,7 @@ function drawFerrisWheel(cx, cy) {
     if (isNight) {
         for (let i = 0; i < 28; i++) {
             const la = (i / 28) * Math.PI * 2;
-            const lit = (Math.floor(Date.now() * 0.004 + i * 0.5) % 3) !== 0;
+            const lit = (Math.floor(simClock * 0.004 + i * 0.5) % 3) !== 0;
             ctx.beginPath(); ctx.arc(cx + Math.cos(la) * wheelR, hubY + Math.sin(la) * wheelR, 1.6, 0, Math.PI * 2);
             ctx.fillStyle = lit ? (i % 2 ? '#fef08a' : '#f0abfc') : 'rgba(148,163,184,0.4)';
             if (lit) { ctx.shadowBlur = 6; ctx.shadowColor = ctx.fillStyle; }
@@ -3172,7 +3190,7 @@ function drawCoaster(cx, cy) {
     ctx.fillText('COASTER', cx + 45, gy - 24);
 
     // Train — 4 linked cars riding the real track, tilting with the slope
-    const T = (Date.now() % 4600) / 4600;
+    const T = (simClock % 4600) / 4600;
     const idx = Math.floor(T * (path.length - 1));
     for (let c = 3; c >= 0; c--) {
         const i = Math.max(0, idx - c * 3);
@@ -3199,7 +3217,7 @@ function drawCoaster(cx, cy) {
     if (isNight) {
         for (let i = 0; i < path.length; i += 6) {
             const p = path[i];
-            ctx.fillStyle = (Math.floor(Date.now() * 0.003 + i) % 2) ? '#fef08a' : '#fb7185';
+            ctx.fillStyle = (Math.floor(simClock * 0.003 + i) % 2) ? '#fef08a' : '#fb7185';
             ctx.shadowBlur = 5; ctx.shadowColor = ctx.fillStyle;
             ctx.beginPath(); ctx.arc(cx + p.x, gy + p.y - 7, 1.3, 0, Math.PI * 2); ctx.fill();
             ctx.shadowBlur = 0;
@@ -3291,7 +3309,7 @@ function drawFoodStall(cx, cy) {
     ctx.fillStyle = '#78350f';
     ctx.beginPath(); ctx.arc(cx + 4, gy - 17, 1.6, 0, Math.PI * 2); ctx.fill();
     ctx.beginPath(); ctx.arc(cx + 9, gy - 17, 1.6, 0, Math.PI * 2); ctx.fill();
-    const t = Date.now() * 0.002;
+    const t = simClock * 0.002;
     ctx.strokeStyle = 'rgba(226,232,240,0.4)'; ctx.lineWidth = 1;
     for (let i = 0; i < 2; i++) {
         const ph = (t * 0.4 + i * 0.5) % 1;
@@ -3344,7 +3362,7 @@ function drawDrinkStall(cx, cy) {
     ctx.fillStyle = '#0ea5e9'; ctx.fillRect(cx - 4.4, gy - 40, 8.8, 7);
     ctx.fillStyle = '#ef4444'; ctx.fillRect(cx + 1.5, gy - 48, 1.6, 6);
     ctx.fillStyle = 'rgba(255,255,255,0.6)';
-    const bt = Date.now() * 0.003;
+    const bt = simClock * 0.003;
     for (let i = 0; i < 3; i++) {
         const bp = (bt + i * 0.33) % 1;
         ctx.beginPath(); ctx.arc(cx - 2 + i * 2, gy - 33 - bp * 6, 0.9, 0, Math.PI * 2); ctx.fill();
@@ -3414,7 +3432,7 @@ function drawBalloonStand(cx, cy) {
     drawIsoDeck(cx, cy, 0.98, '#9f1239', '#6b0f2a', 4);
     setPad(2);
     const gy = cy - 4;
-    const t = Date.now() * 0.002;
+    const t = simClock * 0.002;
 
     // Vendor cart with wheels and a striped skirt
     ctx.fillStyle = '#881337';
@@ -3532,7 +3550,7 @@ function drawGoKarts(cx, cy) {
     }
 
     // 5 karts racing, sorted so near-side ones draw last
-    const t = Date.now() * 0.0012;
+    const t = simClock * 0.0012;
     const kcolors = ['#ef4444', '#3b82f6', '#eab308', '#22c55e', '#a855f7'];
     const karts = [];
     for (let i = 0; i < 5; i++) {
@@ -3579,7 +3597,7 @@ function drawGoKarts(cx, cy) {
 // ── Breakdown smoke + alert ──
 
 function drawBreakdownSmoke(cx, cy) {
-    const t = Date.now() * 0.001;
+    const t = simClock * 0.001;
     for (let i = 0; i < 3; i++) {
         const ph = (t * 0.5 + i * 0.33) % 1;
         const sx = cx + Math.sin(t + i * 2) * 4;
@@ -3754,7 +3772,7 @@ function drawMegaCoaster(cx, cy) {
     }
 
     // Train — 5 cars on the real track, banking through the loop
-    const T = (Date.now() % 7000) / 7000;
+    const T = (simClock % 7000) / 7000;
     const idx = Math.floor(T * (path.length - 1));
     for (let c = 4; c >= 0; c--) {
         const i = Math.max(0, idx - c * 3);
@@ -3779,7 +3797,7 @@ function drawMegaCoaster(cx, cy) {
     if (isNight) {
         for (let i = 0; i < path.length; i += 5) {
             const p = path[i];
-            ctx.fillStyle = (Math.floor(Date.now() * 0.003 + i) % 2) ? '#fef08a' : '#fb7185';
+            ctx.fillStyle = (Math.floor(simClock * 0.003 + i) % 2) ? '#fef08a' : '#fb7185';
             ctx.shadowBlur = 6; ctx.shadowColor = ctx.fillStyle;
             ctx.beginPath(); ctx.arc(cx + p.x, gy + p.y - 8, 1.4, 0, Math.PI * 2); ctx.fill();
             ctx.shadowBlur = 0;
@@ -3894,7 +3912,7 @@ class FireworkParticle {
     }
     draw() {
         if (this.alpha <= 0) return;
-        const flickr = this.sparkle ? (0.5 + Math.sin(Date.now() * 0.02 + this.x) * 0.5) : 1;
+        const flickr = this.sparkle ? (0.5 + Math.sin(simClock * 0.02 + this.x) * 0.5) : 1;
         ctx.beginPath();
         ctx.arc(this.x, this.y, this.size * this.alpha, 0, Math.PI * 2);
         ctx.fillStyle = this.color;
@@ -4003,7 +4021,7 @@ function render() {
                 // Deterministic positions so they don't jump around
                 const sx = ((i * 7919 + 104729) % canvas.width);
                 const sy = ((i * 6271 + 73757) % (canvas.height * 0.5));
-                const twinkle = 0.5 + Math.sin(Date.now() * 0.002 + i * 1.7) * 0.5;
+                const twinkle = 0.5 + Math.sin(simClock * 0.002 + i * 1.7) * 0.5;
                 const size = (i % 3 === 0) ? 2 : 1;
                 ctx.beginPath();
                 ctx.arc(sx, sy, size, 0, Math.PI * 2);
@@ -4139,7 +4157,6 @@ function render() {
 
     // Guests join the same depth sort at their exact interpolated positions
     S.visualGuests.forEach(guest => {
-        guest.update();
         const gd = (guest.x + (guest.targetX - guest.x) * guest.progress)
                  + (guest.y + (guest.targetY - guest.y) * guest.progress);
         drawables.push({ d: gd + 0.6, fn: () => {
@@ -4156,9 +4173,6 @@ function render() {
             }
         }});
     });
-
-    // Staff walk and work at frame cadence, like guests
-    if (gameSpeed > 0) for (let i = 0; i < gameSpeed; i++) updateStaff();
 
     // Staff share the depth sort too
     S.staff.forEach(w => {
@@ -4243,8 +4257,7 @@ function render() {
     // Rain overlay
     drawRainFX();
 
-    // Fireworks (drawn on top of everything)
-    updateFireworks();
+    // Fireworks advance in simTick(); render only paints them.
     if (fireworkShells.length > 0 || fireworkParticles.length > 0) {
         drawFireworks();
     }
@@ -4255,7 +4268,6 @@ function render() {
     // Minimap (own canvas) — every 6th frame is plenty
     if (minimapOn && (++miniFrame % 6 === 0)) drawMinimap();
 
-    requestAnimationFrame(render);
 }
 
 // ────── Interaction Logic ──────
@@ -4586,7 +4598,16 @@ if (import.meta.env.DEV) {
     w.__ACTIONS__ = Object.keys(ACTIONS);
     // Lets tests drive a save without waiting 12s for the autosave interval, and
     // gives the browser console a handle on the live state object.
-    w.__GAME__ = { state: S, saveGame, loadGame };
+    w.__GAME__ = {
+        state: S,
+        saveGame,
+        loadGame,
+        Guest,
+        /** Simulated milliseconds. Frozen while paused -- that is the invariant
+         *  tests/loop.spec.ts checks. */
+        get simClock() { return simClock; },
+        get gameSpeed() { return gameSpeed; },
+    };
 }
 
 // Start
@@ -4605,4 +4626,53 @@ if (restored) {
     logEvent('Tip: press M for management, 1-9 for tools, B to bulldoze, Ctrl+Z to undo.', 'info');
 }
 updateUI();
-render();
+
+// ────── The loop ──────
+
+/** One entity step. Everything here advances in simulated time. */
+function simTick() {
+    for (const guest of S.visualGuests) guest.update();
+    updateStaff();
+    updateFireworks();
+}
+
+/**
+ * Fixed-timestep accumulator.
+ *
+ * `simMs` is zero while paused, so a single `gameSpeed` multiplier is all it
+ * takes for setSpeed(0) to genuinely stop the park -- including the shop
+ * revenue a "paused" game used to keep earning.
+ *
+ * The wall-clock delta is clamped so returning to a backgrounded tab replays a
+ * quarter-second, not the twenty minutes you were away.
+ */
+function frame(now: number) {
+    const wall = Math.min(now - lastFrameAt, MAX_CATCHUP_MS);
+    lastFrameAt = now;
+
+    const simMs = wall * gameSpeed;
+    simClock += simMs;
+    tickAccumulator += simMs;
+    economyAccumulator += simMs;
+
+    let steps = 0;
+    while (tickAccumulator >= TICK_MS && steps < MAX_STEPS_PER_FRAME) {
+        simTick();
+        tickAccumulator -= TICK_MS;
+        steps++;
+    }
+    // Hit the ceiling: drop the backlog instead of spiralling further behind.
+    if (steps >= MAX_STEPS_PER_FRAME) tickAccumulator = 0;
+
+    while (economyAccumulator >= ECONOMY_TICK_MS) {
+        economyTick();
+        economyAccumulator -= ECONOMY_TICK_MS;
+        updateUI();
+    }
+
+    render();
+    requestAnimationFrame(frame);
+}
+
+lastFrameAt = performance.now();
+requestAnimationFrame(frame);
