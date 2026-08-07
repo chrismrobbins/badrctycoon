@@ -146,11 +146,9 @@ function emptyLedger(): Ledger {
 export const STARTING_FUNDS = 10_000;
 export const DEFAULT_GRID_SIZE = 15;
 
-/** Everything unlocked from the start; the rest arrives via research. */
-const STARTING_UNLOCKS = [
-  'path', 'flowerbed', 'trashcan', 'bench', 'lamp', 'tree', 'fountain',
-  'foodstall', 'drinkstall', 'restroom', 'carousel',
-];
+// Derived from the content registry -- anything without a researchOrder. Keeping
+// a second hand-written list here is exactly the duplication phase 3 removed.
+import { STARTING_UNLOCKS } from '../content';
 
 export function createGameState(): GameState {
   return {

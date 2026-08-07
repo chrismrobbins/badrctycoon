@@ -1,6 +1,13 @@
 import './styles/app.css';
 import { createGameState, type RideQueue } from './core/state';
 import { SAVE_KEY, loadFromLocalStorage, saveToLocalStorage } from './save/schema';
+// One source of truth for every buildable thing. These were nine hand-synced
+// tables in the monolith; they are all derived from content/ now.
+import {
+    BUILD_DATA, RIDE_TYPES, SHOP_TYPES, SCENERY_TYPES, TYPE_LABEL, NAME_POOL,
+    RIDE_ACCENT, MINI_COLORS, RESEARCH_ORDER, HOTKEY_TOOLS, PALETTE_GROUPS,
+    NEEDS, NEED_BY_ID, BALLOON_BUY_CHANCE, BALLOON_HAPPINESS,
+} from './content';
 
 // ---------------------------------------------------------------------------
 // PHASE 1: this file is the monolith's <script> block moved verbatim out of
@@ -86,64 +93,13 @@ let fireworksTimer = 0;           // ticks remaining in the show
 const FIREWORK_SHOW_TICKS = 20;   // ~30 seconds of fireworks (20 × 1.5s ticks)
 const FIREWORK_COLORS = ['#ef4444','#3b82f6','#eab308','#ec4899','#8b5cf6','#10b981','#f97316','#06b6d4','#f43f5e','#a3e635'];
 
-// Category helpers
-const SCENERY_TYPES = new Set(['flowerbed', 'lamp', 'tree', 'fountain', 'bench', 'trashcan']);
-const RIDE_TYPES = new Set(['carousel', 'teacups', 'bumper', 'droptower', 'ship', 'haunted', 'ferriswheel', 'coaster', 'gokarts', 'megacoaster']);
-const SHOP_TYPES = new Set(['foodstall', 'drinkstall', 'restroom', 'balloonstand']);
-const RIDE_ACCENT = { ship: '#f59e0b', haunted: '#8b5cf6', ferriswheel: '#3b82f6', coaster: '#ef4444', gokarts: '#22c55e', megacoaster: '#f43f5e' };
-const TYPE_LABEL = {
-    carousel: 'Carousel', teacups: 'Tea Cups', bumper: 'Bumper Cars', droptower: 'Drop Tower',
-    ship: 'Swinging Ship', haunted: 'Haunted House', ferriswheel: 'Ferris Wheel', coaster: 'Rollercoaster',
-    gokarts: 'Go-Karts', megacoaster: 'Mega Coaster', foodstall: 'Food Stall', drinkstall: 'Drink Stall',
-    restroom: 'Restroom', balloonstand: 'Balloon Stand'
-};
 
-// Build data — size 2 means 2×2 footprint; shop entries have shop/price
-const BUILD_DATA = {
-    'path':        { cost: 10,   rating: 1,   size: 1, sceneryBonus: 0, capacity: 0, cycleTime: 0, excitement: 0,  nightBonus: 0 },
-    'flowerbed':   { cost: 25,   rating: 2,   size: 1, sceneryBonus: 3, capacity: 0, cycleTime: 0, excitement: 0,  nightBonus: 0 },
-    'trashcan':    { cost: 30,   rating: 1,   size: 1, sceneryBonus: 1, capacity: 0, cycleTime: 0, excitement: 0,  nightBonus: 0 },
-    'bench':       { cost: 45,   rating: 3,   size: 1, sceneryBonus: 2, capacity: 0, cycleTime: 0, excitement: 0,  nightBonus: 0 },
-    'lamp':        { cost: 40,   rating: 3,   size: 1, sceneryBonus: 2, capacity: 0, cycleTime: 0, excitement: 0,  nightBonus: 8 },
-    'tree':        { cost: 50,   rating: 5,   size: 1, sceneryBonus: 4, capacity: 0, cycleTime: 0, excitement: 0,  nightBonus: 0 },
-    'fountain':    { cost: 150,  rating: 15,  size: 1, sceneryBonus: 10,capacity: 0, cycleTime: 0, excitement: 0,  nightBonus: 0 },
-    'balloonstand':{ cost: 150,  rating: 15,  size: 1, sceneryBonus: 0, capacity: 0, cycleTime: 0, excitement: 0,  nightBonus: 0, shop: 'balloon', price: 4 },
-    'restroom':    { cost: 200,  rating: 10,  size: 1, sceneryBonus: 0, capacity: 0, cycleTime: 0, excitement: 0,  nightBonus: 0, shop: 'bladder', price: 3 },
-    'drinkstall':  { cost: 250,  rating: 20,  size: 1, sceneryBonus: 0, capacity: 0, cycleTime: 0, excitement: 0,  nightBonus: 0, shop: 'thirst', price: 5 },
-    'foodstall':   { cost: 300,  rating: 25,  size: 1, sceneryBonus: 0, capacity: 0, cycleTime: 0, excitement: 0,  nightBonus: 0, shop: 'hunger', price: 8 },
-    'carousel':    { cost: 800,  rating: 50,  size: 1, sceneryBonus: 0, capacity: 6, cycleTime: 3, excitement: 20, nightBonus: 0 },
-    'teacups':     { cost: 900,  rating: 60,  size: 1, sceneryBonus: 0, capacity: 8, cycleTime: 2.5,excitement:25, nightBonus: 0 },
-    'bumper':      { cost: 1200, rating: 70,  size: 1, sceneryBonus: 0, capacity: 10,cycleTime: 3, excitement: 35, nightBonus: 0 },
-    'droptower':   { cost: 1500, rating: 100, size: 1, sceneryBonus: 0, capacity: 4, cycleTime: 4, excitement: 60, nightBonus: 0 },
-    'ship':        { cost: 1800, rating: 120, size: 2, sceneryBonus: 0, capacity: 12,cycleTime: 3.5,excitement:50, nightBonus: 0 },
-    'haunted':     { cost: 2000, rating: 150, size: 2, sceneryBonus: 0, capacity: 6, cycleTime: 5, excitement: 70, nightBonus: 30 },
-    'gokarts':     { cost: 2200, rating: 180, size: 2, sceneryBonus: 0, capacity: 8, cycleTime: 4, excitement: 55, nightBonus: 0 },
-    'ferriswheel': { cost: 2500, rating: 200, size: 2, sceneryBonus: 0, capacity: 16,cycleTime: 4, excitement: 45, nightBonus: 0 },
-    'coaster':     { cost: 4000, rating: 300, size: 2, sceneryBonus: 0, capacity: 8, cycleTime: 5, excitement: 90, nightBonus: 0 },
-    'megacoaster': { cost: 12000,rating: 800, size: 4, sceneryBonus: 0, capacity: 24,cycleTime: 6, excitement: 150,nightBonus: 20 }
-};
 
 // Ride Queues: keyed by "ax,ay"
 let inspectedKey = null;
 
 // ── Ride naming ──
 // Every ride gets a name on construction; the player can rename it.
-const NAME_POOL = {
-    coaster:     ['The Reconciliation', 'Batch Job', 'Ledger Launch', 'Fiscal Freefall', 'The Rollback'],
-    megacoaster: ['The Go-Live', 'Production Deploy', 'Full Reindex', 'The Hypercare', 'Cutover'],
-    ferriswheel: ['Slow Refresh', 'The Sprint Wheel', 'Roundtable', 'Data Cycle'],
-    haunted:     ['Legacy System', 'The Sandbox', 'Undocumented Feature', 'Tech Debt Manor'],
-    ship:        ['Scope Creep', 'The Pendulum', 'Change Order', 'Swing Estimate'],
-    gokarts:     ['Race Condition', 'Parallel Processing', 'The Fast Track', 'Concurrency'],
-    carousel:    ['Circular Reference', 'The Standup', 'Merry Migration', 'Recursion'],
-    teacups:     ['Coffee Break', 'Spin Cycle', 'The Retro', 'Caf2Cups'],
-    bumper:      ['Merge Conflict', 'Collision Detection', 'The Integration', 'Bumper Sync'],
-    droptower:   ['Freefall Friday', 'The Outage', 'Prod Drop', 'Latency Spike'],
-    foodstall:   ['Snack Overflow', 'The Cafeteria', 'Byte Bites'],
-    drinkstall:  ['Hydration Layer', 'The Refill', 'Cold Cache'],
-    restroom:    ['Flush Cache', 'The Necessary', 'Restroom'],
-    balloonstand:['Inflation', 'Balloon Payload', 'Float Values'],
-};
 
 function nextName(type) {
     const pool = NAME_POOL[type] || [TYPE_LABEL[type] || type];
@@ -276,7 +232,6 @@ const MARKETING_CAMPAIGNS = {
 };
 
 // Research — rides unlock in order as you invest
-const RESEARCH_ORDER = ['teacups', 'balloonstand', 'bumper', 'droptower', 'ship', 'ferriswheel', 'haunted', 'gokarts', 'coaster', 'megacoaster'];
 
 
 function isUnlocked(tool) { return tool === 'bulldozer' || S.research.unlocked.includes(tool); }
@@ -932,14 +887,46 @@ function startCampaign(key) {
     sfx('money'); updateUI(); renderMgmt(); saveGame();
 }
 
+// ── Palette ──
+// Generated from the content registry rather than hand-written in index.html,
+// so a new attraction needs no markup change. Non-attraction tools (Buy Land,
+// Bulldozer) stay in the HTML and are left in place.
+function money0(n: number) { return '$' + n.toLocaleString(); }
+
+function paletteButton(a: (typeof PALETTE_GROUPS)[number]['items'][number]) {
+    const size = a.size > 1 ? ` <span class="text-[9px] text-blue-400">(${a.size}×${a.size})</span>` : '';
+    const note = a.ui.note ? `<div class="text-[9px] text-slate-400 dark:text-gray-500">${a.ui.note}</div>` : '';
+    return `
+        <button class="build-btn glass rounded-xl p-3 flex flex-col items-center gap-2 hover:bg-white/50 dark:hover:bg-white/5${a.ui.span ? ' col-span-2' : ''}"
+                data-act="setTool" data-arg="${a.id}">
+            <div class="w-10 h-10 rounded-full ${a.ui.iconBg} flex items-center justify-center ${a.ui.iconFg}"><i class="fas ${a.ui.icon}"></i></div>
+            <div class="text-center">
+                <div class="text-xs font-bold">${a.ui.short ?? a.label}${size}</div>
+                <div class="text-[10px] text-green-600 dark:text-green-400">${money0(a.cost)}</div>
+                ${note}
+            </div>
+        </button>`;
+}
+
+function renderPalette() {
+    const host = document.getElementById('build-palette');
+    if (!host) return;
+    const html = PALETTE_GROUPS.map((g) => {
+        const heading = g.heading
+            ? `<div class="col-span-2 mt-2 text-[10px] font-bold uppercase tracking-widest text-slate-400 dark:text-gray-600 px-1">${g.heading}</div>`
+            : '';
+        return heading + g.items.map(paletteButton).join('');
+    }).join('');
+    host.insertAdjacentHTML('afterbegin', html);
+}
+
 // ── Palette locking ──
 function refreshPalette() {
+    // The tool id is data-arg now. This used to parse it back out of the
+    // onclick="setTool('x')" attribute, which phase 1 removed -- so locking
+    // silently stopped working until this was fixed.
     document.querySelectorAll<HTMLElement>('.build-btn').forEach(btn => {
-        if (!btn.dataset.tool) {
-            const m = (btn.getAttribute('onclick') || '').match(/setTool\('(\w+)'/);
-            if (m) btn.dataset.tool = m[1];
-        }
-        const t = btn.dataset.tool;
+        const t = btn.dataset.act === 'setTool' ? btn.dataset.arg : undefined;
         if (!t) return;
         const locked = !isUnlocked(t);
         btn.classList.toggle('locked', locked);
@@ -1029,11 +1016,6 @@ function guestThought(g) {
 // ═══════════════════════════════════════════════════════════
 let minimapOn = true;
 let miniFrame = 0;
-const MINI_COLORS = {
-    path: '#94a3b8', entrance: '#ef4444', tree: '#15803d', flowerbed: '#ec4899',
-    lamp: '#fde047', fountain: '#3b82f6', bench: '#b45309', trashcan: '#64748b',
-    foodstall: '#f59e0b', drinkstall: '#0ea5e9', restroom: '#94a3b8', balloonstand: '#f43f5e',
-};
 
 function toggleMinimap() {
     minimapOn = !minimapOn;
@@ -1300,7 +1282,7 @@ function setTool(tool, btnElement) {
     document.querySelectorAll('.build-btn').forEach(btn => btn.classList.remove('active'));
     if (btnElement) btnElement.classList.add('active');
     else {
-        const b = document.querySelector(`.build-btn[data-tool="${tool}"]`);
+        const b = document.querySelector<HTMLElement>(`.build-btn[data-act="setTool"][data-arg="${tool}"]`);
         if (b) b.classList.add('active');
     }
 }
@@ -1440,13 +1422,13 @@ class Guest {
     }
 
     update() {
-        // Needs creep up; unmet needs erode happiness
-        this.hunger = Math.min(100, this.hunger + 0.015);
-        this.thirst = Math.min(100, this.thirst + 0.02);
-        this.bladder = Math.min(100, this.bladder + 0.012);
-        if (this.hunger > 85) this.happiness = Math.max(0, this.happiness - 0.02);
-        if (this.thirst > 85) this.happiness = Math.max(0, this.happiness - 0.025);
-        if (this.bladder > 90) this.happiness = Math.max(0, this.happiness - 0.03);
+        // Needs creep up; unmet needs erode happiness. Driven by content/needs.ts
+        // rather than a hardcoded list, so a new need is a data change.
+        for (const need of NEEDS) {
+            const level = Math.min(100, this[need.id] + need.growth);
+            this[need.id] = level;
+            if (level > need.painAbove) this.happiness = Math.max(0, this.happiness - need.painRate);
+        }
         if (S.weather === 'rain') this.happiness = Math.max(0, this.happiness - 0.005);
         // Filth is depressing; a bench underfoot is a nice rest
         const filth = litterAt(this.x, this.y);
@@ -1478,17 +1460,22 @@ class Guest {
                 const cell = S.map[nx][ny];
                 if (cell && SHOP_TYPES.has(cell)) {
                     const sd = BUILD_DATA[cell];
+                    // The shop declares which need it serves; the need declares
+                    // when to buy, what it resets to, and whether it litters.
+                    const need = sd.shop ? NEED_BY_ID[sd.shop] : undefined;
                     let bought = false;
-                    if (sd.shop === 'hunger' && this.hunger > 60) { this.hunger = 10; bought = true; }
-                    else if (sd.shop === 'thirst' && this.thirst > 60) { this.thirst = 10; bought = true; }
-                    else if (sd.shop === 'bladder' && this.bladder > 60) { this.bladder = 5; bought = true; }
-                    else if (sd.shop === 'balloon' && !this.hasBalloon && Math.random() < 0.25) { this.hasBalloon = true; this.happiness = Math.min(100, this.happiness + 10); bought = true; }
+                    if (need) {
+                        if (this[need.id] > need.buyAbove) { this[need.id] = need.resetTo; bought = true; }
+                    } else if (sd.shop === 'balloon' && !this.hasBalloon && Math.random() < BALLOON_BUY_CHANCE) {
+                        this.hasBalloon = true;
+                        this.happiness = Math.min(100, this.happiness + BALLOON_HAPPINESS);
+                        bought = true;
+                    }
                     if (bought && this.money >= sd.price) {
                         earn(sd.price, 'shops');
                         this.money -= sd.price;
                         S.shopSales++;
-                        // Finishing a snack or drink creates litter
-                        if (sd.shop === 'hunger' || sd.shop === 'thirst') dropLitter(this.x, this.y);
+                        if (need?.litters) dropLitter(this.x, this.y);
                         const sk = `${nx},${ny}`;
                         if (!S.shopStats[sk]) S.shopStats[sk] = { sales: 0, earned: 0 };
                         S.shopStats[sk].sales++;
@@ -3944,6 +3931,48 @@ function drawFireworks() {
     for (let p of fireworkParticles) p.draw();
 }
 
+// ────── Sprite table ──────
+// id -> how to draw it. Replaces the two `else if (cell === '...')` chains the
+// renderer used to carry (one for 1x1, one for multi-tile), which meant adding a
+// ride touched the renderer in two places and silently drew nothing if you
+// missed one.
+//
+// Kept separate from content/ on purpose: content/ is pure data with no canvas
+// dependency, so a headless simulation -- and the server's save validation --
+// can import it. Phase 4 splits this into render/sprites/<id>.ts.
+type SpriteFn = (cx: number, cy: number) => void;
+
+const SPRITES: Record<string, SpriteFn> = {
+    flowerbed: drawFlowerBed,
+    trashcan: drawTrashCan,
+    bench: drawBench,
+    lamp: drawLamp,
+    tree: drawTree,
+    fountain: drawFountain,
+
+    balloonstand: drawBalloonStand,
+    restroom: drawRestroom,
+    drinkstall: drawDrinkStall,
+    foodstall: drawFoodStall,
+
+    carousel: drawCarousel,
+    teacups: drawTeaCups,
+    bumper: drawBumperCars,
+    droptower: drawDropTower,
+    ship: drawSwingingShip,
+    haunted: drawHauntedHouse,
+    gokarts: drawGoKarts,
+    ferriswheel: drawFerrisWheel,
+    coaster: drawCoaster,
+    megacoaster: drawMegaCoaster,
+};
+
+// Paths are painted by the ground pass, so they are the one legitimate omission.
+{
+    const missing = Object.keys(BUILD_DATA).filter((id) => id !== 'path' && !SPRITES[id]);
+    if (missing.length) throw new Error(`[render] no sprite for: ${missing.join(', ')}`);
+}
+
 // ────── Main Render Loop ──────
 
 function render() {
@@ -4078,12 +4107,7 @@ function render() {
                 drawables.push({ d: x + y + 2 * (sz - 1), fn: () => {
                     // Structures are authored to the pad's real footprint
                     setPad(sz);
-                    if (cell === 'ship') drawSwingingShip(center.x, center.y);
-                    else if (cell === 'haunted') drawHauntedHouse(center.x, center.y);
-                    else if (cell === 'ferriswheel') drawFerrisWheel(center.x, center.y);
-                    else if (cell === 'coaster') drawCoaster(center.x, center.y);
-                    else if (cell === 'gokarts') drawGoKarts(center.x, center.y);
-                    else if (cell === 'megacoaster') drawMegaCoaster(center.x, center.y);
+                    SPRITES[cell]?.(center.x, center.y);
                     setPad(2);
                     const q = S.rideQueues[aKey];
                     if (q && q.queue > 0) drawRideQueue(x, y, q.queue, sz);
@@ -4092,21 +4116,8 @@ function render() {
             } else {
                 if (cell === 'lamp') lampGlows.push({ x: screenPos.x, y: screenPos.y });
                 drawables.push({ d: x + y, fn: () => {
-                    if (cell === 'entrance') { /* gate is drawn once, below */ }
-                    else if (cell === 'tree') drawTree(screenPos.x, screenPos.y);
-                    else if (cell === 'flowerbed') drawFlowerBed(screenPos.x, screenPos.y);
-                    else if (cell === 'lamp') drawLamp(screenPos.x, screenPos.y);
-                    else if (cell === 'fountain') drawFountain(screenPos.x, screenPos.y);
-                    else if (cell === 'trashcan') drawTrashCan(screenPos.x, screenPos.y);
-                    else if (cell === 'bench') drawBench(screenPos.x, screenPos.y);
-                    else if (cell === 'carousel') drawCarousel(screenPos.x, screenPos.y);
-                    else if (cell === 'teacups') drawTeaCups(screenPos.x, screenPos.y);
-                    else if (cell === 'bumper') drawBumperCars(screenPos.x, screenPos.y);
-                    else if (cell === 'droptower') drawDropTower(screenPos.x, screenPos.y);
-                    else if (cell === 'foodstall') drawFoodStall(screenPos.x, screenPos.y);
-                    else if (cell === 'drinkstall') drawDrinkStall(screenPos.x, screenPos.y);
-                    else if (cell === 'restroom') drawRestroom(screenPos.x, screenPos.y);
-                    else if (cell === 'balloonstand') drawBalloonStand(screenPos.x, screenPos.y);
+                    // The gate is not an attraction; it is drawn once, below.
+                    if (cell !== 'entrance') SPRITES[cell]?.(screenPos.x, screenPos.y);
                     if (RIDE_TYPES.has(cell)) {
                         const q = S.rideQueues[`${x},${y}`];
                         if (q && q.broken) drawBreakdownSmoke(screenPos.x, screenPos.y);
@@ -4460,7 +4471,6 @@ rideNameInput.addEventListener('input', () => {
 rideNameInput.addEventListener('change', saveGame);
 rideNameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') rideNameInput.blur(); });
 // ── Keyboard shortcuts ──
-const HOTKEY_TOOLS = ['path','trashcan','bench','lamp','tree','fountain','foodstall','drinkstall','restroom'];
 window.addEventListener('keydown', (e) => {
     // Never hijack typing in the rename field or a form
     const tgt = e.target as HTMLElement;
@@ -4478,7 +4488,7 @@ window.addEventListener('keydown', (e) => {
         return;
     }
     if (k >= '1' && k <= '9') { const t = HOTKEY_TOOLS[+k - 1]; if (t) setTool(t, null); return; }
-    if (k === 'b') { setTool('bulldozer', document.querySelector('.build-btn[data-tool="bulldozer"]')); return; }
+    if (k === 'b') { setTool('bulldozer', document.querySelector<HTMLElement>('.build-btn[data-arg="bulldozer"]')); return; }
     if (k === ' ') { e.preventDefault(); setSpeed(gameSpeed === 0 ? 1 : 0); return; }
     if (k === '+' || k === '=') { setSpeed(3); return; }
     if (k === '-') { setSpeed(1); return; }
@@ -4582,7 +4592,9 @@ if (import.meta.env.DEV) {
 // Start
 renderObjectives();
 updateLandButton();
+renderPalette();          // must precede refreshPalette(): it creates the buttons
 refreshPalette();
+setTool(currentTool, null);
 if (restored) hydrateEntities();
 recomputeCleanliness();
 syncThemeIcon();
