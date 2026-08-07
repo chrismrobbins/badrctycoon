@@ -412,12 +412,12 @@ Each phase ships independently and is revertable. No big-bang rewrite.
 |---|---|---|
 | **0** ✅ | `legacy/park-builder.html` frozen as reference. Vite + TypeScript + Tailwind v4 toolchain. Playwright smoke suite (8 tests). | Baseline you can refactor against safely |
 | **1** ✅ | Split the file. Marketing chrome out; `<script>` → `client/src/main.ts` as one module; 50 inline `onclick=` handlers → delegated `data-act` dispatch. **No game-logic changes.** | Game runs standalone |
-| **2** | `core/state.js`. Move all ~40 globals into one object; mechanical `funds` → `S.funds`. | Save/load becomes `JSON.stringify(S)` |
-| **3** | Content registry (§4.1). Collapse 8 tables + 2 dispatch chains. | Adding a ride = 1 file |
-| **4** | Split `sim/`, `render/`, `ui/` along the seams the registry exposes. Add the ESLint boundary rule. | Testable simulation |
-| **5** | Fixed-timestep loop + seeded RNG. Fixes §2.3, §2.5, §3.2. | Frame-rate independence |
-| **6** | Save schema + migration chain that never rejects. Fixes §3.1, §3.6. Still localStorage/IndexedDB. | Saves survive version bumps |
-| **7** | Postgres + API. Auth, slots, sync, conflict UI. | Cloud saves |
+| **2** ✅ | `core/state.ts`. All persisted globals into one object; 430 references rewritten from compiler positions. | Save/load is `JSON.stringify(S)` |
+| **3** ✅ | Content registry (§4.1). Nine tables + two dispatch chains + the palette markup collapsed. | Adding a ride = 1 file + 1 sprite |
+| **4** ◐ | `sim/finance.ts` extracted and the ledger bypass fixed (§3.3). **The rest of the split is not done** — see below. | Ledger reconciles |
+| **5** ✅ | Fixed-timestep loop. Fixes §2.3, §2.5, §3.2. Seeded RNG deliberately deferred. | Frame-rate independence, pause works |
+| **6** ◐ | Migration chain that never rejects landed early, with phase 2. §3.6 (litter leak, redundant `anchorOf`) still open. | Saves survive version bumps |
+| **7** | Postgres + API. Auth, slots, sync, conflict UI. See [API-CONTRACT.md](API-CONTRACT.md). | Cloud saves |
 | **8** | Leaderboards, achievements, arcade shell embedding. | Platform |
 
 Phases 2 and 3 are where the "modular and scalable" ask is actually paid off. Phase 6 must
@@ -457,3 +457,40 @@ catch, found on day one.
 `main.ts` is still one 4,510-line file with ~40 module-level `let`s — phase 1 deliberately
 moved code without reshaping it, so that a regression here is attributable to the move alone.
 Phase 2 is where that file starts to shrink.
+
+### Where phases 2–5 got to
+
+```
+client/src/core/state.ts        GameState + createGameState()
+client/src/content/             define, needs, scenery, shops, rides, index
+client/src/save/                schema.ts, migrations.ts
+client/src/sim/finance.ts       the only writer of state.funds
+client/src/main.ts              still ~4,400 lines: render, UI, guests, staff, economy
+tests/                          40 tests across 6 files, all passing
+```
+
+**Phase 4 is the one that is materially incomplete.** `sim/finance.ts` came out because the
+ledger bug needed a structural home, but `render/`, `ui/`, and the rest of `sim/` are still
+inside `main.ts`. What is left:
+
+- Extract `sim/` — `guests.ts`, `staff.ts`, `rides.ts`, `economy.ts`, `litter.ts`,
+  `research.ts`, `marketing.ts`, `awards.ts`, `objectives.ts`. Guest and the staff walker are
+  the big ones; both close over module state today.
+- Extract `render/` — `renderer.ts`, `camera.ts`, `iso.ts`, `weather.ts`, `fireworks.ts`,
+  `minimap.ts`, and `sprites/<id>.ts`. The blocker is that the ~36 draw functions close over
+  a module-level `ctx`; they need it passed in before they can move.
+- Extract `ui/` — palette, statusbar, management tabs, inspectors, event log. This is where
+  the `data-act` dispatch table gets replaced by per-module listeners, and where the ~500
+  lines of hand-rolled CSS should be deleted in favour of Tailwind utilities (§4.5).
+- Add the ESLint `no-restricted-imports` / `no-restricted-globals` boundary rule on `sim/`.
+  Until that exists, nothing stops the simulation reaching for the DOM again;
+  `tests/portability.spec.ts` is the interim guard for the modules the server needs.
+- Make `rating` and `builtValue` derived rather than accumulated (§3.5). This is what would
+  turn API-CONTRACT check 10 from an upper bound into an equality.
+
+Deferred with reasons rather than forgotten:
+
+- **Seeded RNG** (was phase 5). It only matters for server-authoritative replay, and we chose
+  trust model B. It gets cheaper once `sim/` is isolated, and nothing depends on it now.
+- **Litter leak and redundant `anchorOf`** (§3.6). Both are save-size problems, not
+  correctness ones, and both are cleanest to fix while splitting `sim/`.

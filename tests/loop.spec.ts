@@ -143,11 +143,16 @@ test('simulated time never outpaces wall-clock time at normal speed', async ({ p
   await page.goto('/');
   await setSpeed(page, 1);
 
-  // Read wall first and sim second here, then the reverse at the end, so the
-  // wall window strictly encloses the sim window. Measuring the other way round
-  // lets the evaluate() round-trip show up as sim time that "outran" wall time.
-  const wall0 = Date.now();
-  const sim0 = await simClock(page);
+  // Sample both clocks together inside the page. Comparing the page's sim clock
+  // against Node's Date.now() across an evaluate() round-trip makes this flaky
+  // under parallel load, because the two readings are seconds of IPC apart.
+  const sample = () =>
+    page.evaluate(() => ({
+      sim: (window as any).__GAME__.simClock,
+      wall: performance.now(),
+    }));
+
+  const t0 = await sample();
 
   const other = await context.newPage();
   await other.goto('about:blank');
@@ -156,8 +161,16 @@ test('simulated time never outpaces wall-clock time at normal speed', async ({ p
   await page.bringToFront();
   await page.waitForTimeout(200);
 
-  const simElapsed = (await simClock(page)) - sim0;
-  const wallElapsed = Date.now() - wall0;
+  const t1 = await sample();
+  const simElapsed = t1.sim - t0.sim;
+  const wallElapsed = t1.wall - t0.wall;
 
-  expect(simElapsed).toBeLessThanOrEqual(wallElapsed);
+  // One frame of slack. Each sample lands mid-frame, and the frame straddling it
+  // contributes time from before t0 -- so sim can legitimately overshoot by up to
+  // one clamped delta (MAX_CATCHUP_MS = 250). Anything beyond that is the tab
+  // actually fast-forwarding, which is what the clamp exists to prevent.
+  expect(simElapsed).toBeLessThanOrEqual(wallElapsed + 250);
+
+  // And it must genuinely be tracking wall time, not stalled or racing.
+  expect(simElapsed).toBeGreaterThan(wallElapsed * 0.5);
 });
