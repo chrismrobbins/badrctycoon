@@ -118,6 +118,14 @@ export function drawIsoDeck(
   ctx.fill();
 }
 
+/** Deterministic pseudo-random 0..1 from a screen position -- used for
+ *  variant selection and jitter that must stay stable frame to frame
+ *  without a per-object RNG seed (tree species, litter scatter, ...). */
+export function tileHash(cx: number, cy: number): number {
+  const n = Math.sin(cx * 12.9898 + cy * 78.233) * 43758.5453;
+  return n - Math.floor(n);
+}
+
 /** Perimeter fence posts + rail around the pad — instantly sells "this
  *  whole block is the ride." */
 export function drawPadFence(ctx: CanvasRenderingContext2D, cx: number, cy: number, k: number, postColor: string, railColor: string): void {
