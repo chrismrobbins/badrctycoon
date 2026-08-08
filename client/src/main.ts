@@ -35,21 +35,8 @@ import {
     blockCenter, padHalf, setPad, PAD_W, PAD_H, tileHash,
 } from './render/iso';
 import { simClock, isNight, advanceSimClock, setIsNight } from './render/clock';
-import {
-    drawEntrance as drawEntranceImpl, drawParkFence as drawParkFenceImpl, drawTree as drawTreeImpl,
-    drawTrashCan as drawTrashCanImpl, drawBench as drawBenchImpl, drawFlowerBed as drawFlowerBedImpl,
-    drawLamp as drawLampImpl, drawFountain as drawFountainImpl,
-} from './render/sprites/scenery';
-import {
-    drawCarousel as drawCarouselImpl, drawTeaCups as drawTeaCupsImpl, drawBumperCars as drawBumperCarsImpl,
-    drawDropTower as drawDropTowerImpl, drawSwingingShip as drawSwingingShipImpl, drawHauntedHouse as drawHauntedHouseImpl,
-    drawFerrisWheel as drawFerrisWheelImpl, drawCoaster as drawCoasterImpl,
-} from './render/sprites/rides';
-import {
-    drawFoodStall as drawFoodStallImpl, drawDrinkStall as drawDrinkStallImpl, drawRestroom as drawRestroomImpl,
-    drawBalloonStand as drawBalloonStandImpl, drawGoKarts as drawGoKartsImpl,
-} from './render/sprites/shops';
-import { drawMegaCoaster as drawMegaCoasterImpl } from './render/sprites/megacoaster';
+import { drawEntrance as drawEntranceImpl, drawParkFence as drawParkFenceImpl } from './render/sprites/scenery';
+import { SPRITES } from './render/sprites';
 import {
     drawBreakdownSmoke as drawBreakdownSmokeImpl, drawRainFX as drawRainFXImpl,
     drawTooltip as drawTooltipImpl, drawRideQueue as drawRideQueueImpl,
@@ -822,43 +809,14 @@ function drawGroundShadow(cx, cy, w) { drawGroundShadowImpl(ctx, cx, cy, w); }
 function drawIsoDeck(cx, cy, k, topFill, sideFill, lift) { drawIsoDeckImpl(ctx, cx, cy, k, topFill, sideFill, lift); }
 function drawPadFence(cx, cy, k, postColor, railColor) { drawPadFenceImpl(ctx, cx, cy, k, postColor, railColor); }
 
-// drawEntrance/drawParkFence/drawTree/drawTrashCan/drawBench/drawFlowerBed/
-// drawLamp/drawFountain moved to render/sprites/scenery.ts (phase 4); thin
-// wrappers keep the original signatures for render()'s sprite table and the
-// ~40 remaining draw* functions that call each other by these names.
+// drawEntrance/drawParkFence moved to render/sprites/scenery.ts (phase 4);
+// thin wrappers since render() still calls these two directly (they're not
+// in the SPRITES table -- the gate and the boundary fence are drawn once
+// each, not per-cell). Every other scenery/ride/shop draw function's
+// main.ts wrapper is gone: now that render/sprites/index.ts's SPRITES table
+// imports them directly, the wrappers had no remaining caller.
 function drawEntrance(cx, cy) { drawEntranceImpl(ctx, cx, cy, ENTRANCE_X, ENTRANCE_Y); }
 function drawParkFence() { drawParkFenceImpl(ctx, S, ENTRANCE_Y); }
-function drawTree(cx, cy) { drawTreeImpl(ctx, cx, cy); }
-function drawTrashCan(cx, cy) { drawTrashCanImpl(ctx, S, cx, cy); }
-function drawBench(cx, cy) { drawBenchImpl(ctx, cx, cy); }
-function drawFlowerBed(cx, cy) { drawFlowerBedImpl(ctx, cx, cy); }
-function drawLamp(cx, cy) { drawLampImpl(ctx, cx, cy); }
-function drawFountain(cx, cy) { drawFountainImpl(ctx, cx, cy); }
-
-// drawCarousel/drawTeaCups/drawBumperCars/drawDropTower/drawSwingingShip/
-// drawHauntedHouse/drawFerrisWheel/drawCoaster moved to
-// render/sprites/rides.ts (phase 4); same thin-wrapper treatment.
-function drawCarousel(cx, cy) { drawCarouselImpl(ctx, cx, cy); }
-function drawTeaCups(cx, cy) { drawTeaCupsImpl(ctx, cx, cy); }
-function drawBumperCars(cx, cy) { drawBumperCarsImpl(ctx, cx, cy); }
-function drawDropTower(cx, cy) { drawDropTowerImpl(ctx, cx, cy); }
-function drawSwingingShip(cx, cy) { drawSwingingShipImpl(ctx, cx, cy); }
-function drawHauntedHouse(cx, cy) { drawHauntedHouseImpl(ctx, cx, cy); }
-function drawFerrisWheel(cx, cy) { drawFerrisWheelImpl(ctx, cx, cy); }
-function drawCoaster(cx, cy) { drawCoasterImpl(ctx, cx, cy); }
-
-// ── Shops & Services ──
-// tileHash moved to render/iso.ts (phase 4). drawKiosk/drawFoodStall/
-// drawDrinkStall/drawRestroom/drawBalloonStand/drawGoKarts moved to
-// render/sprites/shops.ts; same thin-wrapper treatment (drawKiosk itself
-// needs no wrapper -- it's only ever called by the two stall functions,
-// which moved with it).
-function drawFoodStall(cx, cy) { drawFoodStallImpl(ctx, cx, cy); }
-function drawDrinkStall(cx, cy) { drawDrinkStallImpl(ctx, cx, cy); }
-function drawRestroom(cx, cy) { drawRestroomImpl(ctx, cx, cy); }
-function drawBalloonStand(cx, cy) { drawBalloonStandImpl(ctx, cx, cy); }
-function drawGoKarts(cx, cy) { drawGoKartsImpl(ctx, cx, cy); }
-function drawMegaCoaster(cx, cy) { drawMegaCoasterImpl(ctx, cx, cy); }
 
 // drawBreakdownSmoke/drawRainFX/drawTooltip/drawRideQueue moved to
 // render/effects.ts (phase 4); rainAlpha/rainDrops moved with drawRainFX
@@ -876,46 +834,10 @@ function updateFireworks() { updateFireworksImpl(fireworksActive, canvas); }
 function drawFireworks() { drawFireworksImpl(ctx); }
 
 // ────── Sprite table ──────
-// id -> how to draw it. Replaces the two `else if (cell === '...')` chains the
-// renderer used to carry (one for 1x1, one for multi-tile), which meant adding a
-// ride touched the renderer in two places and silently drew nothing if you
-// missed one.
-//
-// Kept separate from content/ on purpose: content/ is pure data with no canvas
-// dependency, so a headless simulation -- and the server's save validation --
-// can import it. Phase 4 splits this into render/sprites/<id>.ts.
-type SpriteFn = (cx: number, cy: number) => void;
-
-const SPRITES: Record<string, SpriteFn> = {
-    flowerbed: drawFlowerBed,
-    trashcan: drawTrashCan,
-    bench: drawBench,
-    lamp: drawLamp,
-    tree: drawTree,
-    fountain: drawFountain,
-
-    balloonstand: drawBalloonStand,
-    restroom: drawRestroom,
-    drinkstall: drawDrinkStall,
-    foodstall: drawFoodStall,
-
-    carousel: drawCarousel,
-    teacups: drawTeaCups,
-    bumper: drawBumperCars,
-    droptower: drawDropTower,
-    ship: drawSwingingShip,
-    haunted: drawHauntedHouse,
-    gokarts: drawGoKarts,
-    ferriswheel: drawFerrisWheel,
-    coaster: drawCoaster,
-    megacoaster: drawMegaCoaster,
-};
-
-// Paths are painted by the ground pass, so they are the one legitimate omission.
-{
-    const missing = Object.keys(BUILD_DATA).filter((id) => id !== 'path' && !SPRITES[id]);
-    if (missing.length) throw new Error(`[render] no sprite for: ${missing.join(', ')}`);
-}
+// Moved to render/sprites/index.ts (phase 4), now that every draw function
+// it references is itself ctx-explicit and lives in render/. Its integrity
+// check (every non-path BUILD_DATA id has a sprite) runs at import time
+// there, same as before.
 
 // ────── Main Render Loop ──────
 
@@ -1051,7 +973,7 @@ function render() {
                 drawables.push({ d: x + y + 2 * (sz - 1), fn: () => {
                     // Structures are authored to the pad's real footprint
                     setPad(sz);
-                    SPRITES[cell]?.(center.x, center.y);
+                    SPRITES[cell]?.(ctx, center.x, center.y, S);
                     setPad(2);
                     const q = S.rideQueues[aKey];
                     if (q && q.queue > 0) drawRideQueue(x, y, q.queue, sz);
@@ -1061,7 +983,7 @@ function render() {
                 if (cell === 'lamp') lampGlows.push({ x: screenPos.x, y: screenPos.y });
                 drawables.push({ d: x + y, fn: () => {
                     // The gate is not an attraction; it is drawn once, below.
-                    if (cell !== 'entrance') SPRITES[cell]?.(screenPos.x, screenPos.y);
+                    if (cell !== 'entrance') SPRITES[cell]?.(ctx, screenPos.x, screenPos.y, S);
                     if (RIDE_TYPES.has(cell)) {
                         const q = S.rideQueues[`${x},${y}`];
                         if (q && q.broken) drawBreakdownSmoke(screenPos.x, screenPos.y);

@@ -345,8 +345,11 @@ export function drawTree(ctx: CanvasRenderingContext2D, cx: number, cy: number):
   }
 }
 
-export function drawTrashCan(ctx: CanvasRenderingContext2D, state: GameState, cx: number, cy: number): void {
-  const full = state.litter[`${Math.round(cx)},${Math.round(cy)}`] || 0;
+/** `state` is optional and trailing so this fits the uniform SpriteFn shape
+ *  render/sprites/index.ts's SPRITES table uses -- render() always passes it
+ *  in practice; the fallback to 0 only matters for any other caller. */
+export function drawTrashCan(ctx: CanvasRenderingContext2D, cx: number, cy: number, state?: GameState): void {
+  const full = state?.litter[`${Math.round(cx)},${Math.round(cy)}`] || 0;
   drawGroundShadow(ctx, cx, cy, 7);
   // Tapered bin with hoop bands
   ctx.fillStyle = '#3f4a5a';
