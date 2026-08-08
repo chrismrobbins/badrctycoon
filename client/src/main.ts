@@ -3,7 +3,9 @@ import { createGameState, emptyLedger, type RideQueue, type GameState } from './
 import { SAVE_KEY, loadFromLocalStorage, saveToLocalStorage } from './save/schema';
 import * as Fin from './sim/finance';
 import { builtValue, parkRating, parkValue } from './sim/park';
-import { AWARDS } from './content/awards';
+import { AWARD_DEFS, evaluateAwards as evaluateAwardsSim } from './sim/awards';
+import { getSceneryBonusAt } from './sim/scenery';
+import { isNightAt } from './sim/time';
 import { createApi } from './net/client';
 import { mountAuthUI } from './ui/auth';
 import { getPlaytimeMs, startPlaytimeTracking, ensureAtLeast as ensurePlaytimeAtLeast } from './save/playtime';
@@ -190,7 +192,7 @@ function renderRideStats() {
     let html = '';
     if (RIDE_TYPES.has(type)) {
         const q: Partial<RideQueue> = S.rideQueues[inspectedKey] || {};
-        const scenery = getSceneryBonusAt(ax, ay);
+        const scenery = getSceneryBonusAt(S, ax, ay);
         const nightB = isNight ? d.nightBonus : 0;
         const total = d.excitement + scenery + nightB;
         html += statRow('Status', q.broken ? 'BROKEN DOWN' : 'Operating', q.broken ? 'text-red-500' : 'text-green-500');
@@ -545,61 +547,16 @@ function drawLitterAt(x, y, sx, sy) {
 }
 
 // ── Awards ──
-// Metadata (label, icon, rating) lives in content/awards.ts because parkRating()
-// and the server both need the rating as data. Only the predicates are here,
-// since they read live simulation state.
-const AWARD_TESTS: Record<string, () => boolean> = {
-    clean:   () => S.cleanliness >= 92 && S.guests >= 15,
-    value:   () => S.admissionPrice <= 10 && S.parkHappiness >= 70 && S.guests >= 20,
-    thrill:  () => totalExcitement() >= 400,
-    safe:    () => Object.values(S.rideQueues).length >= 4
-                   && Object.values(S.rideQueues).every(q => (q.breakdowns || 0) === 0),
-    staffed: () => S.staff.length >= 4 && S.guests >= 25 && S.cleanliness >= 80,
-    beauty:  () => countType(['tree', 'flowerbed', 'fountain']) >= 20,
-    tycoon:  () => parkValue(S) >= 100000,
-};
-
-const AWARD_DEFS = AWARDS.map((a) => ({ ...a, test: AWARD_TESTS[a.id] }));
-
-// An award with no predicate can never be won, and one with no metadata scores
-// zero rating. Fail at startup rather than either.
-{
-    const missing = AWARDS.filter((a) => !AWARD_TESTS[a.id]).map((a) => a.id);
-    const orphans = Object.keys(AWARD_TESTS).filter((id) => !AWARDS.some((a) => a.id === id));
-    if (missing.length) throw new Error(`[awards] no test for: ${missing.join(', ')}`);
-    if (orphans.length) throw new Error(`[awards] test with no definition: ${orphans.join(', ')}`);
-}
-
-function countType(types) {
-    let n = 0;
-    for (let x = 0; x < S.gridSize; x++)
-        for (let y = 0; y < S.gridSize; y++)
-            if (types.includes(S.map[x][y])) n++;
-    return n;
-}
-
-function totalExcitement() {
-    let t = 0;
-    for (const key in S.rideQueues) {
-        const [ax, ay] = key.split(',').map(Number);
-        const type = S.map[ax]?.[ay];
-        if (type && BUILD_DATA[type]) t += BUILD_DATA[type].excitement + getSceneryBonusAt(ax, ay);
-    }
-    return t;
-}
-
+// Predicates, AWARD_DEFS and evaluateAwards() itself now live in sim/awards.ts
+// (metadata was already in content/awards.ts). evaluateAwardsSim() only
+// mutates S.awardsWon and returns what was newly won; the event-log/fireworks/
+// sound side effects below are UI concerns and stay here until ui/ splits out.
 function evaluateAwards() {
-    for (const a of AWARD_DEFS) {
-        if (S.awardsWon.some(w => w.id === a.id)) continue;
-        let passed = false;
-        try { passed = a.test(); } catch (e) { passed = false; }
-        if (passed) {
-            S.awardsWon.push({ id: a.id, day: S.dayCount });
-            logEvent(`🏆 AWARD: ${a.label}! (+${a.rating} rating)`, 'good');
-            fireworksActive = true;
-            fireworksTimer = Math.max(fireworksTimer, 6);
-            sfx('award');
-        }
+    for (const a of evaluateAwardsSim(S)) {
+        logEvent(`🏆 AWARD: ${a.label}! (+${a.rating} rating)`, 'good');
+        fireworksActive = true;
+        fireworksTimer = Math.max(fireworksTimer, 6);
+        sfx('award');
     }
 }
 
@@ -1372,7 +1329,7 @@ function updateUI() {
     } else if (hour < 7) {
         nightAlpha = ((7 - hour) / 2) * 0.55;
     }
-    isNight = hour >= 19 || hour < 6;
+    isNight = isNightAt(S.gameTime);
     // Store for render loop
     window._nightAlpha = nightAlpha;
 }
@@ -1386,31 +1343,8 @@ function logEvent(msg, type='info') {
     log.scrollTop = log.scrollHeight;
 }
 
-// ────── Scenery Bonus System ──────
-
-function getSceneryBonusAt(ax, ay) {
-    // Check a 3-tile radius around the anchor for scenery items
-    let bonus = 0;
-    const radius = 3;
-    const data = BUILD_DATA[S.map[ax]?.[ay]];
-    const sz = data ? data.size : 1;
-    // Check around all tiles of the building
-    for (let ox = -radius; ox < sz + radius; ox++) {
-        for (let oy = -radius; oy < sz + radius; oy++) {
-            const cx = ax + ox, cy = ay + oy;
-            if (cx < 0 || cx >= S.gridSize || cy < 0 || cy >= S.gridSize) continue;
-            const cell = S.map[cx][cy];
-            if (cell && SCENERY_TYPES.has(cell)) {
-                const sd = BUILD_DATA[cell];
-                bonus += sd.sceneryBonus;
-                if (isNight && sd.nightBonus) bonus += sd.nightBonus;
-            }
-        }
-    }
-    return bonus;
-}
-
 // ────── Guest Entity Class ──────
+// getSceneryBonusAt() moved to sim/scenery.ts (phase 4); call sites below pass S.
 const GUEST_FIRST = ['Ava','Ben','Cleo','Dev','Elle','Finn','Gia','Hugo','Iris','Jax','Kira','Leo','Mira','Nils','Otto','Pia','Quinn','Rosa','Sam','Tess','Uma','Vic','Wren','Xena','Yuri','Zed'];
 const GUEST_LAST = ['Alvarez','Brooks','Chen','Diaz','Evans','Farr','Gupta','Hale','Ito','Jensen','Kaur','Lund','Moss','Novak','Owens','Park','Quist','Reyes','Silva','Tran','Vega','Walsh'];
 
@@ -1689,7 +1623,7 @@ function processRideQueues() {
         if (q.cycleTimer >= data.cycleTime) {
             // Ride cycle complete — riders disembark happy
             if (q.riders === undefined) { q.riders = 0; q.earned = 0; q.breakdowns = 0; }
-            const sceneryBonus = getSceneryBonusAt(ax, ay);
+            const sceneryBonus = getSceneryBonusAt(S, ax, ay);
             const nightBonus = isNight ? data.nightBonus : 0;
             const excitementTotal = data.excitement + sceneryBonus + nightBonus;
 
