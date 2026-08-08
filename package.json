@@ -36,6 +36,9 @@
   },
   "private": true,
   "dependencies": {
+    "@fastify/cookie": "^11.1.2",
+    "@fastify/rate-limit": "^11.2.0",
+    "@node-rs/argon2": "^2.0.2",
     "dotenv": "^17.4.2",
     "fastify": "^5.11.2",
     "pg": "^8.22.0"
