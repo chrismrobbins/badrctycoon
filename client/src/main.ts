@@ -7,6 +7,10 @@ import { AWARD_DEFS, evaluateAwards as evaluateAwardsSim } from './sim/awards';
 import { getSceneryBonusAt } from './sim/scenery';
 import { isNightAt } from './sim/time';
 import { litterAt, dropLitter, recomputeCleanliness } from './sim/litter';
+import {
+    pathTiles, staffCount, dailyWages, bfsRoute, stepRoute, wanderStep, updateStaff,
+    hireStaff as hireStaffSim, fireStaff as fireStaffSim,
+} from './sim/staff';
 import { createApi } from './net/client';
 import { mountAuthUI } from './ui/auth';
 import { getPlaytimeMs, startPlaytimeTracking, ensureAtLeast as ensurePlaytimeAtLeast } from './save/playtime';
@@ -16,6 +20,7 @@ import {
     BUILD_DATA, RIDE_TYPES, SHOP_TYPES, SCENERY_TYPES, TYPE_LABEL, NAME_POOL,
     RIDE_ACCENT, MINI_COLORS, RESEARCH_ORDER, HOTKEY_TOOLS, PALETTE_GROUPS,
     NEEDS, NEED_BY_ID, BALLOON_BUY_CHANCE, BALLOON_HAPPINESS,
+    STAFF_KINDS,
 } from './content';
 
 // ---------------------------------------------------------------------------
@@ -249,13 +254,6 @@ const LOAN_LIMIT = 60000;
 const DAILY_INTEREST = 0.005;
 let undoStack = [];
 
-const STAFF_KINDS = {
-    janitor:     { label: 'Janitor',     wage: 30, color: '#22c55e', icon: 'fa-broom',   blurb: 'Sweeps litter off your paths' },
-    mechanic:    { label: 'Mechanic',    wage: 48, color: '#f59e0b', icon: 'fa-wrench',  blurb: 'Repairs breakdowns far faster' },
-    entertainer: { label: 'Entertainer', wage: 36, color: '#ec4899', icon: 'fa-masks-theater', blurb: 'Cheers up guests stuck in queues' },
-};
-const STAFF_NAMES = ['Dana','Kwame','Rosa','Ivan','Mei','Tariq','Nora','Luis','Ada','Omar','Zoe','Pete'];
-
 const MARKETING_CAMPAIGNS = {
     radio:      { label: 'Local Radio Spot', cost: 600,  days: 3, boost: 0.25 },
     billboard:  { label: 'Highway Billboard', cost: 1500, days: 5, boost: 0.5 },
@@ -278,184 +276,29 @@ const sumOf = Fin.sumOf;
 // ── Litter ── moved to sim/litter.ts (phase 4); call sites below pass S.
 
 // ── Staff ──
-function pathTiles() {
-    const out = [];
-    for (let x = 0; x < S.gridSize; x++)
-        for (let y = 0; y < S.gridSize; y++)
-            if (S.map[x][y] === 'path' || S.map[x][y] === 'entrance') out.push({ x, y });
-    return out;
-}
-
+// pathTiles/bfsRoute/stepRoute/wanderStep/updateStaff/staffCount/dailyWages
+// moved to sim/staff.ts (phase 4). hireStaff/fireStaff stay here as thin
+// wrappers -- the event-log/sound/UI-refresh calls are ui/render concerns
+// that haven't moved yet, same pattern as evaluateAwards() above.
 function hireStaff(kind) {
-    const k = STAFF_KINDS[kind];
-    if (!k) return;
-    const tiles = pathTiles();
-    if (!tiles.length) { logEvent('Build some paths before hiring staff.', 'bad'); return; }
-    if (S.funds < k.wage * 2) { logEvent(`Not enough cash to hire a ${k.label}.`, 'bad'); return; }
-    const start = tiles[Math.floor(Math.random() * tiles.length)];
-    S.staff.push({
-        kind, name: STAFF_NAMES[Math.floor(Math.random() * STAFF_NAMES.length)],
-        x: start.x, y: start.y, tx: start.x, ty: start.y, progress: 1,
-        speed: 0.024 + Math.random() * 0.012, task: null, swing: Math.random() * 6,
-        route: null, reroute: 0, cleaned: 0, sweepFx: 0, lastX: -1, lastY: -1
-    });
-    logEvent(`Hired ${S.staff[S.staff.length - 1].name} as a ${k.label} ($${k.wage}/day).`, 'good');
+    const result = hireStaffSim(S, kind);
+    if (result.ok === false) {
+        logEvent(
+            result.reason === 'no-paths' ? 'Build some paths before hiring staff.' : `Not enough cash to hire a ${STAFF_KINDS[kind].label}.`,
+            'bad',
+        );
+        return;
+    }
+    logEvent(`Hired ${result.staff.name} as a ${result.kindDef.label} ($${result.kindDef.wage}/day).`, 'good');
     if (mgmtTab === 'staff') renderMgmt();
     sfx('hire');
 }
 
 function fireStaff(kind) {
-    const i = S.staff.findIndex(s => s.kind === kind);
-    if (i < 0) return;
-    logEvent(`${S.staff[i].name} (${STAFF_KINDS[kind].label}) has left the park.`, 'info');
-    S.staff.splice(i, 1);
+    const removed = fireStaffSim(S, kind);
+    if (!removed) return;
+    logEvent(`${removed.name} (${STAFF_KINDS[kind].label}) has left the park.`, 'info');
     if (mgmtTab === 'staff') renderMgmt();
-}
-
-function staffCount(kind) { return S.staff.filter(s => s.kind === kind).length; }
-function dailyWages() { return S.staff.reduce((sum, s) => sum + STAFF_KINDS[s.kind].wage, 0); }
-
-// Breadth-first walk over walkable tiles → the shortest route to the nearest
-// tile satisfying `isGoal`. Greedy stepping used to stall in corridors and
-// dead ends; this always finds the real way there.
-function bfsRoute(from, isGoal, adjacentIsEnough?) {
-    const kk = (x, y) => x + ',' + y;
-    const start = kk(from.x, from.y);
-    const prev = new Map([[start, null]]);
-    const queue = [[from.x, from.y]];
-    const dirs = [[0, 1], [1, 0], [0, -1], [-1, 0]];
-    let found = null, head = 0;
-
-    while (head < queue.length) {
-        const [cx, cy] = queue[head++];
-        if (!(cx === from.x && cy === from.y)) {
-            if (isGoal(cx, cy)) { found = kk(cx, cy); break; }
-            if (adjacentIsEnough) {
-                // Rides aren't walkable, so stop on a tile beside one
-                let hit = false;
-                for (const [dx, dy] of dirs) if (isGoal(cx + dx, cy + dy)) { hit = true; break; }
-                if (hit) { found = kk(cx, cy); break; }
-            }
-        }
-        for (const [dx, dy] of dirs) {
-            const nx = cx + dx, ny = cy + dy;
-            if (nx < 0 || ny < 0 || nx >= S.gridSize || ny >= S.gridSize) continue;
-            const c = S.map[nx]?.[ny];
-            if (c !== 'path' && c !== 'entrance') continue;
-            const k = kk(nx, ny);
-            if (prev.has(k)) continue;
-            prev.set(k, kk(cx, cy));
-            queue.push([nx, ny]);
-        }
-    }
-    if (!found) return null;
-    const route = [];
-    for (let cur = found; cur && cur !== start; cur = prev.get(cur)) {
-        const [px, py] = cur.split(',').map(Number);
-        route.unshift({ x: px, y: py });
-    }
-    return route.length ? route : null;
-}
-
-function stepRoute(w) {
-    if (!w.route || !w.route.length) return false;
-    const next = w.route.shift();
-    w.tx = next.x; w.ty = next.y; w.progress = 0;
-    return true;
-}
-
-function wanderStep(w) {
-    const dirs = [[0, 1], [1, 0], [0, -1], [-1, 0]];
-    const options = [];
-    for (const [dx, dy] of dirs) {
-        const nx = w.x + dx, ny = w.y + dy;
-        if (nx < 0 || ny < 0 || nx >= S.gridSize || ny >= S.gridSize) continue;
-        const c = S.map[nx]?.[ny];
-        if (c === 'path' || c === 'entrance') options.push({ x: nx, y: ny });
-    }
-    if (!options.length) return;
-    // Prefer not to immediately double back
-    const fwd = options.filter(o => o.x !== w.lastX || o.y !== w.lastY);
-    const pick = (fwd.length ? fwd : options)[Math.floor(Math.random() * (fwd.length ? fwd.length : options.length))];
-    w.lastX = w.x; w.lastY = w.y;
-    w.tx = pick.x; w.ty = pick.y; w.progress = 0;
-}
-
-// Called every animation frame (same cadence as guests) — running this on the
-// 1.5s economy tick made staff move ~1 tile per 90 seconds, so janitors could
-// never keep up with littering.
-function updateStaff() {
-    for (const w of S.staff) {
-        if (w.progress < 1) { w.progress += w.speed; continue; }
-        w.x = w.tx; w.y = w.ty;
-        if (w.sweepFx > 0) w.sweepFx--;
-
-        if (w.kind === 'janitor') {
-            // Sweep the tile underfoot clean, and knock back the neighbours
-            let didClean = false;
-            if (litterAt(S, w.x, w.y) > 0) {
-                S.litter[`${w.x},${w.y}`] = 0;
-                didClean = true;
-                w.cleaned = (w.cleaned || 0) + 1;
-            }
-            for (const [dx, dy] of [[0, 1], [1, 0], [0, -1], [-1, 0]]) {
-                const k = `${w.x + dx},${w.y + dy}`;
-                if (S.litter[k] > 0) { S.litter[k] = Math.max(0, S.litter[k] - 1); didClean = true; }
-            }
-            if (didClean) { w.sweepFx = 20; recomputeCleanliness(S); }
-
-            // Re-route to the nearest mess when the current plan is spent
-            if (!w.route || !w.route.length || --w.reroute <= 0) {
-                w.route = bfsRoute(w, (x, y) => litterAt(S, x, y) > 0);
-                w.reroute = 120;
-            }
-            w.task = didClean ? 'sweeping up' : (w.route && w.route.length ? `heading to litter (${w.route.length} tiles)` : 'patrolling — all clean');
-            if (!stepRoute(w)) wanderStep(w);
-
-        } else if (w.kind === 'mechanic') {
-            // Rush to broken rides; standing beside one slashes repair time
-            const brokenAt = (x, y) => {
-                const a = S.anchorOf[`${x},${y}`];
-                const key = a ? `${a.ax},${a.ay}` : `${x},${y}`;
-                return !!(S.rideQueues[key] && S.rideQueues[key].broken);
-            };
-            let working = false;
-            for (const [dx, dy] of [[0, 0], [0, 1], [1, 0], [0, -1], [-1, 0]]) {
-                const nx = w.x + dx, ny = w.y + dy;
-                if (nx < 0 || ny < 0 || nx >= S.gridSize || ny >= S.gridSize) continue;
-                if (!brokenAt(nx, ny)) continue;
-                const a = S.anchorOf[`${nx},${ny}`];
-                const key = a ? `${a.ax},${a.ay}` : `${nx},${ny}`;
-                S.rideQueues[key].repairTimer -= 0.35;   // per frame — a mechanic on site fixes it fast
-                working = true;
-                w.sweepFx = 6;
-                break;
-            }
-            if (working) {
-                w.task = 'repairing a breakdown';
-                w.route = null;
-            } else {
-                if (!w.route || !w.route.length || --w.reroute <= 0) {
-                    w.route = bfsRoute(w, brokenAt, true);
-                    w.reroute = 120;
-                }
-                w.task = (w.route && w.route.length) ? 'en route to a breakdown' : 'inspecting rides';
-                if (!stepRoute(w)) wanderStep(w);
-            }
-
-        } else {
-            // Entertainer — cheer up anyone nearby
-            let cheered = 0;
-            for (const g of S.visualGuests) {
-                if (Math.abs(g.x - w.x) + Math.abs(g.y - w.y) <= 2) {
-                    g.happiness = Math.min(100, g.happiness + 0.12);
-                    cheered++;
-                }
-            }
-            w.task = cheered ? `entertaining ${cheered} guest${cheered > 1 ? 's' : ''}` : 'looking for a crowd';
-            wanderStep(w);
-        }
-    }
 }
 
 // Drawn per-worker so staff can join the scene's depth sort
@@ -732,7 +575,7 @@ function renderMgmt() {
     else if (mgmtTab === 'staff') {
         h += `<div class="m-note" style="margin-bottom:1rem;">Wages are paid out of your cash every in-game day. Staff walk your paths — build paths so they can reach things.</div>`;
         for (const k in STAFF_KINDS) {
-            const s = STAFF_KINDS[k], n = staffCount(k);
+            const s = STAFF_KINDS[k], n = staffCount(S, k as keyof typeof STAFF_KINDS);
             h += `<div class="m-card">
                 <div class="m-icon" style="background:${s.color}22;color:${s.color}"><i class="fas ${s.icon}"></i></div>
                 <div style="flex:1;min-width:0;">
@@ -745,7 +588,7 @@ function renderMgmt() {
         }
         h += `<div class="m-block">
             ${row('Total staff', S.staff.length)}
-            ${row('Total daily wages', money(dailyWages()), C.red)}
+            ${row('Total daily wages', money(dailyWages(S)), C.red)}
             ${row('Park cleanliness', `${Math.round(S.cleanliness)}%`, S.cleanliness > 80 ? C.green : S.cleanliness > 50 ? C.amber : C.red)}
         </div>`;
         if (S.staff.length) {
@@ -1783,7 +1626,7 @@ function runDailyBooks() {
     S.dayLedger = emptyLedger();   // one definition, in core/state.ts
 
     // Wages
-    const wages = dailyWages();
+    const wages = dailyWages(S);
     if (wages > 0) {
         spend(wages, 'wages');
         if (S.funds < 0) logEvent(`Payroll of ${money(wages)} put you in the red!`, 'bad');
@@ -4585,7 +4428,7 @@ const authUI = mountAuthUI(document.getElementById('account'), {
 /** One entity step. Everything here advances in simulated time. */
 function simTick() {
     for (const guest of S.visualGuests) guest.update();
-    updateStaff();
+    updateStaff(S);
     updateFireworks();
 }
 

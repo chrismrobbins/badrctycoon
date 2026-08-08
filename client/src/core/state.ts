@@ -15,6 +15,10 @@
  * in ui/ and render/. Persisting the camera is a later, separate decision.
  */
 
+// Type-only, so this doesn't create a real runtime cycle with sim/staff.ts
+// importing GameState back -- import type is erased at compile time.
+import type { Staff } from '../sim/staff';
+
 /** Bump on any shape change and add a migration. See migrations.ts -- the loader
  *  must never reject an old save, only upgrade it. */
 export const SAVE_VERSION = 8;
@@ -126,8 +130,7 @@ export interface GameState {
   /** Keyed by anchor "ax,ay" -- player-facing names, user input. */
   rideNames: Record<string, string>;
   shopStats: Record<string, ShopStat>;
-  // Typed as Staff[] in phase 4 when the worker moves to sim/staff.ts
-  staff: any[];
+  staff: Staff[];
 }
 
 export function emptyLedger(): Ledger {
