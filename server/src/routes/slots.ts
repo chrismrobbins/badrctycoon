@@ -1,34 +1,30 @@
 /**
- * Save slots -- step 4 of docs/BACKEND-HANDOFF.md's build order.
+ * Save slots -- steps 4 and 5 of docs/BACKEND-HANDOFF.md's build order:
+ * list/load/save/delete, the CAS on `revision`, and the 11-point validation
+ * table (API-CONTRACT.md §6, validation.ts) run on every PUT.
  *
- * Deliberately WITHOUT the 11-point validation table (API-CONTRACT.md §6) --
- * that is step 5. What is here: routing, auth, and the concurrency mechanics
- * the handoff calls out as "the part most likely to be subtly wrong" (§5
- * step 4) -- the CAS on `revision`, done in SQL, and the save_history write
- * that goes with it (contract §5).
- *
- * One check does land early anyway: `migrate(state)` returning non-null.
- * That is check 2 in the table, but it is not optional here -- summarize()
- * and the CAS writes below need a well-formed GameState just to not throw,
- * so there is no version of "without validation" that skips it.
+ * The CAS is the part the handoff calls out as "the part most likely to be
+ * subtly wrong" (§5 step 4) -- done in SQL, not application code, with the
+ * save_history write that goes with it (contract §5).
  *
  * Headline stats (day/funds/parkValue/rating/guests) are always recomputed
  * from `state` via shared summarize(), never read from a client-asserted
- * field -- see the PR notes on API-CONTRACT.md §6 checks 7/10: the contract
- * says to "compare against the SlotMeta the client sent," but neither
- * GameState nor SavePayload (net/client.ts) carries one. The only
+ * field -- see validation.ts's header on API-CONTRACT.md §6 checks 7/10: the
+ * contract says to "compare against the SlotMeta the client sent," but
+ * neither GameState nor SavePayload (net/client.ts) carries one. The only
  * implementable and trust-model-B-consistent reading is that the server
  * never accepts a claimed parkValue/rating at all -- it computes both, and
  * that computed number is what gets stored. `funds` is the one real
- * exception (it is a GameState field), and it gets its own self-consistency
- * check (ledgerReconciles) in step 5, not a comparison against a claim.
+ * exception (it is a GameState field); its self-consistency check
+ * (ledgerReconciles, check 6) is a real assertion in validation.ts.
  */
 
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { pool } from '../db';
 import { apiError } from '../errors';
 import { requireUser } from '../auth/session';
-import { migrate, summarize, type GameState } from '../shared';
+import { summarize, type GameState } from '../shared';
+import { validateSave, type StoredSlot } from '../validation';
 
 const SLOT_MIN = 1;
 const SLOT_MAX = 12;
@@ -95,6 +91,18 @@ async function fetchSlotMeta(userId: string, slot: number): Promise<SlotMeta | n
   return rows[0] ? toSlotMeta(rows[0]) : null;
 }
 
+/** Just enough of the current row for validation checks 8/9 -- null for a
+ *  slot that doesn't exist yet, which those checks treat as "nothing to be
+ *  monotonic against." */
+async function fetchStoredSlot(userId: string, slot: number): Promise<StoredSlot | null> {
+  const { rows } = await pool.query<{ day: number; playtime_ms: string | number }>(
+    `SELECT day, playtime_ms FROM save_slots WHERE user_id = $1 AND slot = $2`,
+    [userId, slot],
+  );
+  const row = rows[0];
+  return row ? { day: row.day, playtimeMs: Number(row.playtime_ms) } : null;
+}
+
 interface PutBody {
   parkName?: string;
   playtimeMs?: number;
@@ -137,7 +145,7 @@ export async function slotRoutes(app: FastifyInstance): Promise<void> {
     const slot = parseSlotParam(request);
     const body = request.body ?? {};
 
-    if (typeof body.parkName !== 'string' || body.parkName.length < 1) {
+    if (typeof body.parkName !== 'string') {
       throw apiError(400, 'invalid_park_name', 'parkName is required.');
     }
     if (typeof body.playtimeMs !== 'number' || !Number.isFinite(body.playtimeMs) || body.playtimeMs < 0) {
@@ -147,15 +155,18 @@ export async function slotRoutes(app: FastifyInstance): Promise<void> {
       throw apiError(400, 'invalid_base_revision', 'baseRevision must be a non-negative integer.');
     }
 
-    // Check 2 (API-CONTRACT.md §6), landed early -- see file header.
-    const state = migrate(body.state);
-    if (!state) throw apiError(400, 'invalid_save', 'Not a recoverable save.');
+    // The 11-point table (API-CONTRACT.md §6), run "before touching the
+    // database" -- stored is read-only context for checks 8/9 (monotonic day
+    // and playtime), not a write, and the actual write is still gated by the
+    // CAS below regardless of what stored held at read time.
+    const stored = await fetchStoredSlot(user.id, slot);
+    const { state, parkName } = validateSave(body.state, body.parkName, body.playtimeMs, stored);
 
     const summary = summarize(state);
     const params = [
       user.id,
       slot,
-      body.parkName,
+      parkName,
       summary.saveVersion,
       summary.day,
       summary.funds,
