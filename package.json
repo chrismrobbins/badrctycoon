@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit && tsc -p server/tsconfig.json --noEmit",
     "test": "playwright test",
     "test:ui": "playwright test --ui",
+    "lint": "node scripts/check-sim-boundary.mjs",
     "server:typecheck": "tsc -p server/tsconfig.json --noEmit",
     "worker:dev": "wrangler dev",
     "deploy": "npm run build && wrangler deploy"
