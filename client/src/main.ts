@@ -44,7 +44,7 @@ import {
     panDelta, panKeyDown, panKeyUp, clearHeldKeys,
     MIN_ZOOM, MAX_ZOOM,
 } from './render/navigation';
-import { drawGuestSprite } from './render/guestsprite';
+import { drawGuestSprite, guestOffset } from './render/guestsprite';
 import { drawEntranceSprite } from './render/entrancesprite';
 import {
     drawBreakdownSmoke as drawBreakdownSmokeImpl, drawRainFX as drawRainFXImpl,
@@ -737,11 +737,22 @@ class Guest {
         // Don't draw if queued
         if (this.queuedAt) return;
 
-        let currentMapX = this.x + (this.targetX - this.x) * this.progress;
-        let currentMapY = this.y + (this.targetY - this.y) * this.progress;
+        // Per-guest lane within the tile -- see guestOffset(). Applied in MAP
+        // space so the spread turns with the park.
+        const off = guestOffset(this.walkPhase);
+        let currentMapX = this.x + (this.targetX - this.x) * this.progress + off.ox;
+        let currentMapY = this.y + (this.targetY - this.y) * this.progress + off.oy;
         let pos = toScreen(currentMapX, currentMapY);
 
         let hop = Math.sin(this.progress * Math.PI) * 4;
+
+        // Contact shadow. Two jobs: it anchors the figure to the ground, and
+        // it separates overlapping guests in a crowd -- a body reads as being
+        // in FRONT of the one behind when it casts over it.
+        ctx.beginPath();
+        ctx.ellipse(pos.x, pos.y, 4.2, 2.0, 0, 0, Math.PI * 2);
+        ctx.fillStyle = 'rgba(0,0,0,0.22)';
+        ctx.fill();
 
         // Baked walking figure (render/guestsprite.ts). Its anchor is the
         // guest's FEET, so the hop is applied to the blit position rather than
@@ -1063,16 +1074,21 @@ function render() {
         }
     }
 
-    // Guests join the same depth sort at their exact interpolated positions
+    // Guests join the same depth sort at their exact interpolated positions,
+    // INCLUDING their per-guest sub-tile offset -- otherwise the spread that
+    // stops them overlapping visually doesn't affect who draws in front, and
+    // they flicker past each other.
     S.visualGuests.forEach(guest => {
-        const gd = (guest.x + (guest.targetX - guest.x) * guest.progress)
-                 + (guest.y + (guest.targetY - guest.y) * guest.progress);
-        drawables.push({ d: gd + 0.6, fn: () => {
+        const go = guestOffset(guest.walkPhase);
+        const gmx = guest.x + (guest.targetX - guest.x) * guest.progress + go.ox;
+        const gmy = guest.y + (guest.targetY - guest.y) * guest.progress + go.oy;
+        drawables.push({ d: depthOf(gmx, gmy) + 0.6, fn: () => {
             guest.draw();
             // Selection ring on the inspected guest
             if (guest === inspectedGuest && !guest.queuedAt) {
-                const mx = guest.x + (guest.targetX - guest.x) * guest.progress;
-                const my = guest.y + (guest.targetY - guest.y) * guest.progress;
+                const so = guestOffset(guest.walkPhase);
+                const mx = guest.x + (guest.targetX - guest.x) * guest.progress + so.ox;
+                const my = guest.y + (guest.targetY - guest.y) * guest.progress + so.oy;
                 const p = toScreen(mx, my);
                 ctx.strokeStyle = '#60a5fa'; ctx.lineWidth = 1.5;
                 ctx.beginPath(); ctx.ellipse(p.x, p.y, 7, 3.5, 0, 0, Math.PI * 2); ctx.stroke();
@@ -1085,7 +1101,7 @@ function render() {
     // Staff share the depth sort too
     S.staff.forEach(w => {
         const mx = w.x + (w.tx - w.x) * w.progress, my = w.y + (w.ty - w.y) * w.progress;
-        drawables.push({ d: mx + my + 0.7, fn: () => drawStaffOne(w) });
+        drawables.push({ d: depthOf(mx, my) + 0.7, fn: () => drawStaffOne(w) });
     });
 
     // The fixed gate draws once, at its centre tile's depth

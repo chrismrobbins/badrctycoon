@@ -97,5 +97,30 @@ export function drawGuestSprite(
   return true;
 }
 
+/**
+ * A stable sub-tile offset for one guest, in MAP units.
+ *
+ * Guests move tile to tile, so without this every guest standing on the same
+ * tile draws at exactly the same screen point. On a busy path that stacks them
+ * into a solid multicoloured ribbon with no readable individuals -- which is
+ * precisely what a full park looked like.
+ *
+ * Derived from walkPhase, which is already per-guest, stable, and persisted,
+ * so a guest keeps its lane across saves instead of jittering every frame.
+ * Returned in map units (not screen px) so the spread rotates with the map.
+ *
+ * +/-0.3 keeps a guest inside its own tile: wider and they visibly stand off
+ * the edge of the path they are supposed to be walking on.
+ */
+const SPREAD = 0.30;
+
+export function guestOffset(walkPhase: number): { ox: number; oy: number } {
+  const p = walkPhase || 0;
+  // Two decorrelated fractional parts from one seed.
+  const a = (p * 0.013) % 1;
+  const b = (p * 0.0291) % 1;
+  return { ox: (a - 0.5) * 2 * SPREAD, oy: (b - 0.5) * 2 * SPREAD };
+}
+
 /** Height of the sprite box, so callers can place things above the head. */
 export const GUEST_SPRITE_H = g ? g.h : 0;
