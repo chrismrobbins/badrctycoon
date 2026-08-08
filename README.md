@@ -35,7 +35,9 @@ demolish or undo; un-researched rides are greyed out again; bulldozing a path no
 its litter entry into the save forever.
 
 `client/src/main.ts` is down to ~1,560 lines -- the composition root now, not the monolith.
-See [ARCHITECTURE.md](docs/ARCHITECTURE.md) §8 for the phase 4 postmortem.
+See [ARCHITECTURE.md](docs/ARCHITECTURE.md) §8 for the phase 4 postmortem, or
+**[docs/PHASE4-HANDOFF.md](docs/PHASE4-HANDOFF.md)** for the traps found doing it and what's
+left before touching `client/` again.
 
 ## Backend
 

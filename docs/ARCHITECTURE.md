@@ -493,7 +493,9 @@ tests/                          61 tests across the suite (55 pass locally; 6 mo
                                  with `npm run worker:dev` running)
 ```
 
-**Phase 4 is done.** `sim/`, `ui/`, and `render/` are all split out. What actually happened,
+**Phase 4 is done.** See [PHASE4-HANDOFF.md](PHASE4-HANDOFF.md) for the traps found doing it,
+what's deliberately still open, and the exact state to pick up from. `sim/`, `ui/`, and
+`render/` are all split out. What actually happened,
 in order, differs a little from the plan above:
 
 - `sim/` came out first, in the order guests/staff (the two the plan called out as the big
