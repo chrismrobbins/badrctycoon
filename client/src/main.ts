@@ -35,10 +35,10 @@ import {
     blockCenter, padHalf, setPad, PAD_W, PAD_H, tileHash, drawTileQuad,
 } from './render/iso';
 import { simClock, isNight, advanceSimClock, setIsNight } from './render/clock';
-import { drawEntrance as drawEntranceImpl, drawParkFence as drawParkFenceImpl } from './render/sprites/scenery';
+import { drawEntrance as drawEntranceImpl, drawEntranceNight as drawEntranceNightImpl, drawParkFence as drawParkFenceImpl } from './render/sprites/scenery';
 import { SPRITES } from './render/sprites';
 import {
-    setRotation, setRotationAngle, setGridSize, rotation, rotationAngle, depthOf, blockCorners,
+    setRotationAngle, setGridSize, rotation, rotationAngle, depthOf, blockCorners,
 } from './render/camera';
 import {
     panDelta, panKeyDown, panKeyUp, clearHeldKeys,
@@ -882,8 +882,13 @@ function drawPadFence(cx, cy, k, postColor, railColor) { drawPadFenceImpl(ctx, c
 // imports them directly, the wrappers had no remaining caller.
 function drawEntrance(cx, cy) {
     // Baked gate turns with the map; the vector original is the pre-decode
-    // fallback, as with every other sprite.
-    if (drawEntranceSprite(ctx, cx, cy)) return;
+    // fallback, as with every other sprite. The night bulbs are an overlay on
+    // top of the blit -- the gate isn't in SPRITES, so it has no automatic
+    // overlay hook and has to do it here.
+    if (drawEntranceSprite(ctx, cx, cy)) {
+        if (isNight) drawEntranceNightImpl(ctx, cx, cy, ENTRANCE_X, ENTRANCE_Y);
+        return;
+    }
     drawEntranceImpl(ctx, cx, cy, ENTRANCE_X, ENTRANCE_Y);
 }
 function drawParkFence() { drawParkFenceImpl(ctx, S, ENTRANCE_Y); }

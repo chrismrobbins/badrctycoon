@@ -194,25 +194,7 @@ export function drawEntrance(ctx: CanvasRenderingContext2D, cx: number, cy: numb
   });
 
   // Chase lights tracing the arch
-  if (isNight) {
-    for (let i = 0; i <= 12; i++) {
-      const k = i / 12,
-        v = 1 - k;
-      const px = v * v * springB.x + 2 * v * k * cx + k * k * springF.x;
-      const py = v * v * (springB.y - 6) + 2 * v * k * (apexY - 4) + k * k * (springF.y - 6);
-      const lit = Math.floor(simClock * 0.004 + i) % 3 !== 0;
-      ctx.fillStyle = lit ? (i % 2 ? '#fef08a' : '#fb7185') : 'rgba(148,163,184,0.5)';
-      if (lit) {
-        ctx.shadowBlur = 7;
-        ctx.shadowColor = ctx.fillStyle;
-      }
-      ctx.beginPath();
-      ctx.arc(px, py, 1.6, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.shadowBlur = 0;
-    }
-  
-  }
+  if (isNight) drawEntranceNight(ctx, cx, cy, entranceX, entranceY);
 
   wall(springF, F);
   kiosk(F, -1); // front kiosk (down-left) overlaps the arch leg
@@ -641,3 +623,58 @@ export function drawLampNight(ctx: CanvasRenderingContext2D, cx: number, cy: num
     ctx.fill();
   }
   }
+
+
+/**
+ * Chase lights along the entrance arch, at night.
+ *
+ * Split out so the BAKED gate (render/entrancesprite.ts) can blit the day
+ * structure and still get its bulbs -- main.ts tints the scene after dark, but
+ * emissive detail has to be drawn, not dimmed. The vector drawEntrance() still
+ * calls it, so the fallback path is unchanged.
+ *
+ * Takes the entrance tile because the arch springs from points derived from
+ * the neighbouring tiles' real screen positions -- the same derivation
+ * drawEntrance() does, repeated here rather than threaded through, so this
+ * stays a plain draw call.
+ */
+export function drawEntranceNight(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  entranceX: number,
+  entranceY: number,
+): void {
+  const centre = toScreen(entranceX, entranceY);
+  const back = toScreen(entranceX, entranceY - 1);
+  const front = toScreen(entranceX, entranceY + 1);
+  const dx = cx - centre.x,
+    dy = cy - centre.y;
+  const B = { x: back.x + dx, y: back.y + dy };
+  const F = { x: front.x + dx, y: front.y + dy };
+  const ax = F.x - B.x,
+    ay = F.y - B.y;
+  const alen = Math.hypot(ax, ay) || 1;
+  const ux = ax / alen,
+    uy = ay / alen;
+  const springB = { x: B.x + ux * 11, y: B.y + uy * 11 };
+  const springF = { x: F.x - ux * 11, y: F.y - uy * 11 };
+  const apexY = cy - 56;
+
+  for (let i = 0; i <= 12; i++) {
+    const k = i / 12,
+      v = 1 - k;
+    const px = v * v * springB.x + 2 * v * k * cx + k * k * springF.x;
+    const py = v * v * (springB.y - 6) + 2 * v * k * (apexY - 4) + k * k * (springF.y - 6);
+    const lit = Math.floor(simClock * 0.004 + i) % 3 !== 0;
+    ctx.fillStyle = lit ? (i % 2 ? '#fef08a' : '#fb7185') : 'rgba(148,163,184,0.5)';
+    if (lit) {
+      ctx.shadowBlur = 7;
+      ctx.shadowColor = ctx.fillStyle;
+    }
+    ctx.beginPath();
+    ctx.arc(px, py, 1.6, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+  }
+}

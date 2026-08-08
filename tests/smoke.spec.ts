@@ -141,10 +141,15 @@ test('top-bar controls are wired', async ({ page }) => {
   await page.locator('[data-act="setSpeed"][data-arg="3"]').click();
   await expect(page.locator('#speed-3')).toHaveClass(/text-blue-500/);
 
-  await page.locator('[data-act="toggleMinimap"]').click();
+  // The minimap starts hidden, and ONE click opens it. This used to assert the
+  // opposite, which was encoding ARCHITECTURE.md 3.7's bug: minimapOn started
+  // true while the panel shipped with `hidden`, so the first click set the flag
+  // false and re-hid an already-hidden panel.
   await expect(page.locator('#minimap-wrap')).toBeHidden();
   await page.locator('[data-act="toggleMinimap"]').click();
   await expect(page.locator('#minimap-wrap')).toBeVisible();
+  await page.locator('[data-act="toggleMinimap"]').click();
+  await expect(page.locator('#minimap-wrap')).toBeHidden();
 
   expect(errors).toEqual([]);
 });
