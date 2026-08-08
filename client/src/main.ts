@@ -1,5 +1,5 @@
 import './styles/app.css';
-import { createGameState, emptyLedger, type RideQueue, type GameState } from './core/state';
+import { createGameState, type RideQueue, type GameState } from './core/state';
 import { SAVE_KEY, loadFromLocalStorage, saveToLocalStorage } from './save/schema';
 import * as Fin from './sim/finance';
 import { builtValue, parkRating, parkValue } from './sim/park';
@@ -14,6 +14,7 @@ import {
 import { OBJECTIVES, checkObjectives as checkObjectivesSim } from './sim/objectives';
 import { processRideQueues as processRideQueuesSim } from './sim/rides';
 import { createGuest, updateGuest as updateGuestSim } from './sim/guests';
+import { perceivedValue as perceivedValueSim, economyTick as economyTickSim, DAILY_INTEREST } from './sim/economy';
 import { createApi } from './net/client';
 import { mountAuthUI } from './ui/auth';
 import { getPlaytimeMs, startPlaytimeTracking, ensureAtLeast as ensurePlaytimeAtLeast } from './save/playtime';
@@ -23,7 +24,7 @@ import {
     BUILD_DATA, RIDE_TYPES, SHOP_TYPES, SCENERY_TYPES, TYPE_LABEL, NAME_POOL,
     RIDE_ACCENT, MINI_COLORS, RESEARCH_ORDER, HOTKEY_TOOLS, PALETTE_GROUPS,
     NEEDS, NEED_BY_ID, BALLOON_BUY_CHANCE, BALLOON_HAPPINESS,
-    STAFF_KINDS,
+    STAFF_KINDS, MARKETING_CAMPAIGNS,
 } from './content';
 
 // ---------------------------------------------------------------------------
@@ -114,7 +115,6 @@ let economyAccumulator = 0;
 let lastFrameAt = 0;
 
 // Day/Night Cycle
-const TIME_SPEED = 0.15; // hours per economy tick (1.5s)
 let isNight = false;     // derived from S.gameTime each updateUI()
 
 // Weather FX (the weather itself is S.weather)
@@ -129,7 +129,6 @@ let fireworkParticles = [];
 let fireworkShells = [];
 let fireworksActive = false;
 let fireworksTimer = 0;           // ticks remaining in the show
-const FIREWORK_SHOW_TICKS = 20;   // ~30 seconds of fireworks (20 × 1.5s ticks)
 const FIREWORK_COLORS = ['#ef4444','#3b82f6','#eab308','#ec4899','#8b5cf6','#10b981','#f97316','#06b6d4','#f43f5e','#a3e635'];
 
 
@@ -254,14 +253,7 @@ function demolishInspected() {
 // ═══════════════════════════════════════════════════════════
 
 const LOAN_LIMIT = 60000;
-const DAILY_INTEREST = 0.005;
 let undoStack = [];
-
-const MARKETING_CAMPAIGNS = {
-    radio:      { label: 'Local Radio Spot', cost: 600,  days: 3, boost: 0.25 },
-    billboard:  { label: 'Highway Billboard', cost: 1500, days: 5, boost: 0.5 },
-    influencer: { label: 'Influencer Tour',   cost: 3200, days: 7, boost: 0.9 },
-};
 
 // Research — rides unlock in order as you invest
 
@@ -668,7 +660,7 @@ function renderMgmt() {
     el.innerHTML = h;
 }
 
-function perceivedValue() { return Math.max(2, Math.round(parkRating(S) / 22 + S.parkHappiness / 12 + Object.keys(S.rideQueues).length * 0.8)); }
+function perceivedValue() { return perceivedValueSim(S); }
 function setAdmission(v) {
     S.admissionPrice = parseInt(v, 10);
     const lbl = document.getElementById('price-label');
@@ -1250,196 +1242,40 @@ function processRideQueues() {
 
 // ────── Economy Loop ──────
 // Driven by the fixed-timestep loop at the bottom of this file, not its own
-// setInterval. economyTick() itself is unchanged.
-
+// setInterval. The tick logic itself (time/day advance, weather, attendance,
+// ride queues, midnight fireworks) and the daily-books bookkeeping both moved
+// to sim/economy.ts (phase 4). This wrapper turns the returned events/flags
+// into UI side effects: logEvent, constructing display-owning Guest instances
+// for new arrivals (sim can't -- see sim/guests.ts), closing the guest panel
+// if the currently-inspected guest just left, refreshing the palette on a
+// research unlock, and the day-roll UI refresh.
+//
+// fireworksActive/fireworksTimer stay module-level here -- transient FX, not
+// part of GameState (see EconomyTickResult's comment in sim/economy.ts) --
+// and are threaded through the sim call each tick.
 function economyTick() {
-    // Advance time
-    S.gameTime = (S.gameTime + TIME_SPEED) % 24;
-    if (S.gameTime < TIME_SPEED) {
-        S.dayCount++;
-        logEvent(`— Day ${S.dayCount} begins —`, 'info');
-        runDailyBooks();
+    const result = economyTickSim(S, { fireworksActive, fireworksTimer });
+    fireworksActive = result.fireworksActive;
+    fireworksTimer = result.fireworksTimer;
+
+    for (const e of result.events) logEvent(e.msg, e.type);
+
+    for (let i = 0; i < result.guestsToSpawn; i++) {
+        S.visualGuests.push(new Guest(ENTRANCE_X, ENTRANCE_Y));
+    }
+    if (result.singleLeaver && inspectedGuest === result.singleLeaver) closeGuestPanel();
+
+    if (result.researchUnlocked) {
+        refreshPalette();
+        sfx('award');
+    }
+    if (result.checkAwards) evaluateAwards();
+    if (result.dayRolled) {
+        renderMgmt();
+        saveGame();
     }
 
-    // Weather roll
-    S.weatherTicks--;
-    if (S.weatherTicks <= 0) {
-        S.weatherTicks = 25 + Math.floor(Math.random() * 30);
-        const prev = S.weather;
-        const r = Math.random();
-        S.weather = r < 0.55 ? 'clear' : r < 0.8 ? 'cloudy' : 'rain';
-        if (S.weather !== prev) {
-            if (S.weather === 'rain') logEvent('Rain moves in — attendance will dip.', 'bad');
-            else if (prev === 'rain') logEvent('The rain clears. Guests are coming back!', 'good');
-            else if (S.weather === 'cloudy') logEvent('Clouds drift over the park.', 'info');
-        }
-    }
-
-    // Check park open/closed
-    // The gate is 3 tiles wide — a path touching any of them opens the park
-    let connected = false;
-    const dirs = [[0,1],[1,0],[0,-1],[-1,0]];
-    for (const [ex, ey] of ENTRANCE_TILES) {
-        for (const d of dirs) {
-            const nx = ex + d[0], ny = ey + d[1];
-            if (nx >= 0 && nx < S.gridSize && ny >= 0 && ny < S.gridSize && S.map[nx][ny] === 'path') {
-                connected = true; break;
-            }
-        }
-        if (connected) break;
-    }
-
-    if (connected && !S.isParkOpen) {
-        S.isParkOpen = true;
-        logEvent('Path connected to Entrance! The park is now OPEN.', 'good');
-    } else if (!connected && S.isParkOpen) {
-        S.isParkOpen = false;
-        logEvent('Path to Entrance severed. The park is CLOSED.', 'bad');
-    }
-
-    // Night + weather arrival penalties
-    const nightMultiplier = isNight ? 0.4 : 1.0;
-    const weatherMultiplier = S.weather === 'rain' ? 0.45 : S.weather === 'cloudy' ? 0.85 : 1.0;
-
-    if (S.isParkOpen) {
-        // Attendance = rating × happiness × night × weather × price appeal × marketing
-        const happinessMultiplier = 0.5 + (S.parkHappiness / 100) * 1.0;
-        const pv = perceivedValue();
-        // Cheap tickets draw crowds; overpricing empties the park
-        const priceMultiplier = S.admissionPrice <= pv
-            ? 1 + (pv - S.admissionPrice) * 0.05
-            : Math.max(0.08, 1 - (S.admissionPrice - pv) * 0.14);
-        const campaignMultiplier = S.marketing.key ? 1 + MARKETING_CAMPAIGNS[S.marketing.key].boost : 1;
-        const cleanMultiplier = 0.7 + (S.cleanliness / 100) * 0.3;
-        let targetGuests = Math.floor((parkRating(S) / 3) * happinessMultiplier * nightMultiplier
-                                      * weatherMultiplier * priceMultiplier * campaignMultiplier * cleanMultiplier);
-
-        if (S.guests < targetGuests) {
-            const newGuests = Math.floor(Math.random() * 3) + 1;
-            S.guests += newGuests;
-            for (let i = 0; i < newGuests; i++) {
-                S.visualGuests.push(new Guest(ENTRANCE_X, ENTRANCE_Y));
-                // Each arrival pays admission at the gate
-                if (S.admissionPrice > 0) earn(S.admissionPrice, 'admission');
-            }
-        }
-        if (S.guests > targetGuests && S.guests > 0) {
-            S.guests -= 1;
-            const leaver = S.visualGuests.pop();
-            if (leaver && inspectedGuest === leaver) closeGuestPanel();
-        }
-
-        // Process ride queues
-        processRideQueues();
-
-        // Calculate park happiness average
-        if (S.visualGuests.length > 0) {
-            let totalHappy = 0;
-            for (let g of S.visualGuests) totalHappy += g.happiness;
-            S.parkHappiness = totalHappy / S.visualGuests.length;
-        }
-
-        // Day/night flavor events
-        if (isNight && Math.random() > 0.95) {
-            logEvent('The park glows under the night sky...', 'info');
-        }
-        const hour = Math.floor(S.gameTime);
-        if (hour === 6 && S.gameTime - hour < TIME_SPEED) {
-            logEvent('Dawn breaks — guests are arriving!', 'good');
-        }
-        if (hour === 19 && S.gameTime - hour < TIME_SPEED) {
-            logEvent('Night falls over the park...', 'info');
-        }
-
-        // Midnight fireworks show!
-        if (hour === 0 && S.gameTime - hour < TIME_SPEED && !fireworksActive) {
-            fireworksActive = true;
-            fireworksTimer = FIREWORK_SHOW_TICKS;
-            logEvent('✦ MIDNIGHT FIREWORKS! The sky lights up! ✦', 'good');
-            // Big happiness boost for everyone watching
-            for (let g of S.visualGuests) {
-                g.happiness = Math.min(100, g.happiness + 25);
-            }
-        }
-
-        // Count down fireworks show
-        if (fireworksActive) {
-            fireworksTimer--;
-            if (fireworksTimer <= 0) {
-                fireworksActive = false;
-                logEvent('The fireworks finale dazzles the crowd!', 'good');
-                // Final happiness bump
-                for (let g of S.visualGuests) {
-                    g.happiness = Math.min(100, g.happiness + 10);
-                }
-            }
-        }
-
-    } else {
-        if (S.guests > 0) {
-            S.guests = Math.max(0, S.guests - 5);
-            while (S.visualGuests.length > S.guests) S.visualGuests.pop();
-        }
-    }
-
-    // Guests, staff and FX advance in simTick(); this is the slow tick.
-    recomputeCleanliness(S);
     checkObjectives();
-}
-
-// ── Daily bookkeeping: wages, interest, research, campaigns, inspectors ──
-function runDailyBooks() {
-    // Reset the day's snapshot
-    S.dayLedger = emptyLedger();   // one definition, in core/state.ts
-
-    // Wages
-    const wages = dailyWages(S);
-    if (wages > 0) {
-        spend(wages, 'wages');
-        if (S.funds < 0) logEvent(`Payroll of ${money(wages)} put you in the red!`, 'bad');
-    }
-
-    // Loan interest
-    if (S.loanBalance > 0) {
-        const interest = Math.ceil(S.loanBalance * DAILY_INTEREST);
-        spend(interest, 'interest');
-        logEvent(`Loan interest charged: ${money(interest)}.`, 'info');
-    }
-
-    // Research progress
-    const nextTool = RESEARCH_ORDER.find(t => !S.research.unlocked.includes(t));
-    if (nextTool && S.research.budget > 0 && S.funds >= S.research.budget) {
-        spend(S.research.budget, 'research');
-        S.research.progress += S.research.budget / 6;
-        if (S.research.progress >= 100) {
-            S.research.progress = 0;
-            S.research.unlocked.push(nextTool);
-            refreshPalette();
-            logEvent(`🔬 R&D breakthrough: ${TYPE_LABEL[nextTool]} is now available to build!`, 'good');
-            sfx('award');
-        }
-    }
-
-    // Marketing countdown
-    if (S.marketing.key) {
-        S.marketing.daysLeft--;
-        if (S.marketing.daysLeft <= 0) {
-            logEvent(`${MARKETING_CAMPAIGNS[S.marketing.key].label} has ended.`, 'info');
-            S.marketing = { key: null, daysLeft: 0 };
-        }
-    }
-
-    // Inspectors every 3 days
-    if (S.dayCount - S.lastAwardDay >= 3) {
-        S.lastAwardDay = S.dayCount;
-        evaluateAwards();
-    }
-
-    // Bankruptcy warning
-    if (S.funds < -2000) logEvent('You are deep in debt. Consider a loan or raising prices.', 'bad');
-
-    renderMgmt();
-    saveGame();
 }
 
 // ────── Math & Drawing Functions ──────

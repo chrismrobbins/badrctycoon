@@ -16,6 +16,8 @@ export type { Attraction, Category, NeedId } from './define';
 export { NEEDS, NEED_BY_ID, BALLOON_BUY_CHANCE, BALLOON_HAPPINESS } from './needs';
 export { STAFF_KINDS, STAFF_NAMES } from './staff';
 export type { StaffKindId, StaffKindDef } from './staff';
+export { MARKETING_CAMPAIGNS } from './marketing';
+export type { MarketingCampaignId, MarketingCampaignDef } from './marketing';
 
 export const ATTRACTIONS: Attraction[] = [...SCENERY, ...SHOPS, ...RIDES];
 
