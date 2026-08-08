@@ -31,8 +31,10 @@ import { isUnlocked as isUnlockedSim, renderPalette as renderPaletteSim, refresh
 import { TILE_W, TILE_H, toScreen, camOffset as camOffsetImpl, toMap as toMapImpl } from './render/camera';
 import {
     drawPoly as drawPolyImpl, drawPolyN as drawPolyNImpl, drawGroundShadow as drawGroundShadowImpl,
+    drawIsoDeck as drawIsoDeckImpl, drawPadFence as drawPadFenceImpl,
     blockCenter, padHalf, setPad, PAD_W, PAD_H,
 } from './render/iso';
+import { simClock, isNight, advanceSimClock, setIsNight } from './render/clock';
 import { createApi } from './net/client';
 import { mountAuthUI } from './ui/auth';
 import { getPlaytimeMs, startPlaytimeTracking, ensureAtLeast as ensurePlaytimeAtLeast } from './save/playtime';
@@ -122,15 +124,13 @@ const ECONOMY_TICK_MS = 1500;     // unchanged
 const MAX_CATCHUP_MS = 250;       // a backgrounded tab must not fast-forward the park
 const MAX_STEPS_PER_FRAME = 120;  // bail out rather than spiral if a frame runs long
 
-/** Milliseconds of simulated time. Drives every animation, so pause freezes them
- *  and the same tick always renders the same frame. */
-let simClock = 0;
+// simClock/isNight moved to render/clock.ts (phase 4) -- imported below,
+// read directly everywhere here since main.ts is now a reader of both
+// except the two sites that call their setters (the fixed-timestep loop,
+// updateUI()).
 let tickAccumulator = 0;
 let economyAccumulator = 0;
 let lastFrameAt = 0;
-
-// Day/Night Cycle
-let isNight = false;     // derived from S.gameTime each updateUI()
 
 // Weather FX (the weather itself is S.weather)
 let rainDrops = [];
@@ -756,10 +756,9 @@ function setTool(tool, btnElement) {
 // formatTime/updateUI/logEvent moved to ui/statusbar.ts and ui/eventlog.ts
 // (phase 4). updateUI() keeps its name and zero-arg signature so the ~10
 // call sites below don't need touching; it only needs a wrapper because it
-// has to keep main.ts's own `isNight` (read by draw functions still here)
-// in sync with what ui/statusbar.ts computes.
+// has to push what ui/statusbar.ts computes into render/clock.ts's isNight.
 function updateUI() {
-    isNight = updateStatusBarSim(S);
+    setIsNight(updateStatusBarSim(S));
 }
 
 // ────── Guest Entity Class ──────
@@ -908,48 +907,8 @@ function drawPoly(x, y, color, borderColor = null) { drawPolyImpl(ctx, x, y, col
 function drawPolyN(ax, ay, sz, color, borderColor = null) { drawPolyNImpl(ctx, ax, ay, sz, color, borderColor); }
 function drawGroundShadow(cx, cy, w) { drawGroundShadowImpl(ctx, cx, cy, w); }
 
-// A deck/slab covering the pad, inset by `k` (0..1), with optional height
-// so it reads as a raised platform with a visible front edge.
-function drawIsoDeck(cx, cy, k, topFill, sideFill, lift) {
-    const w = PAD_W * k, h = PAD_H * k;
-    const L = lift || 0;
-    if (L > 0) {
-        // Front-facing sides (south-west and south-east faces)
-        ctx.fillStyle = sideFill;
-        ctx.beginPath();
-        ctx.moveTo(cx - w, cy - L); ctx.lineTo(cx, cy + h - L);
-        ctx.lineTo(cx, cy + h); ctx.lineTo(cx - w, cy);
-        ctx.closePath(); ctx.fill();
-        ctx.beginPath();
-        ctx.moveTo(cx + w, cy - L); ctx.lineTo(cx, cy + h - L);
-        ctx.lineTo(cx, cy + h); ctx.lineTo(cx + w, cy);
-        ctx.closePath(); ctx.fill();
-    }
-    ctx.beginPath();
-    ctx.moveTo(cx, cy - h - L); ctx.lineTo(cx + w, cy - L);
-    ctx.lineTo(cx, cy + h - L); ctx.lineTo(cx - w, cy - L);
-    ctx.closePath();
-    ctx.fillStyle = topFill; ctx.fill();
-}
-
-// Perimeter fence posts + rail around the pad — instantly sells "this
-// whole block is the ride."
-function drawPadFence(cx, cy, k, postColor, railColor) {
-    const w = PAD_W * k, h = PAD_H * k;
-    const corners = [[0, -h], [w, 0], [0, h], [-w, 0]];
-    ctx.strokeStyle = railColor; ctx.lineWidth = 1.5;
-    for (let e = 0; e < 4; e++) {
-        const a = corners[e], b = corners[(e + 1) % 4];
-        for (let s = 0; s < 4; s++) {
-            const t0 = s / 4, t1 = (s + 1) / 4;
-            const x0 = cx + a[0] + (b[0] - a[0]) * t0, y0 = cy + a[1] + (b[1] - a[1]) * t0;
-            const x1 = cx + a[0] + (b[0] - a[0]) * t1, y1 = cy + a[1] + (b[1] - a[1]) * t1;
-            ctx.beginPath(); ctx.moveTo(x0, y0 - 6); ctx.lineTo(x1, y1 - 6); ctx.stroke();
-            ctx.fillStyle = postColor;
-            ctx.fillRect(x0 - 0.75, y0 - 7, 1.5, 7);
-        }
-    }
-}
+function drawIsoDeck(cx, cy, k, topFill, sideFill, lift) { drawIsoDeckImpl(ctx, cx, cy, k, topFill, sideFill, lift); }
+function drawPadFence(cx, cy, k, postColor, railColor) { drawPadFenceImpl(ctx, cx, cy, k, postColor, railColor); }
 
 // The park entrance — a fixed 3-tile gate, drawn once at its centre tile.
 // Straight out of the RCT playbook: paved plaza, twin ticket kiosks with
@@ -3595,7 +3554,7 @@ function frame(now: number) {
     lastFrameAt = now;
 
     const simMs = wall * gameSpeed;
-    simClock += simMs;
+    advanceSimClock(simMs);
     tickAccumulator += simMs;
     economyAccumulator += simMs;
 

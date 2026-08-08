@@ -75,3 +75,78 @@ export function setPad(sz: number): void {
   PAD_W = p.w;
   PAD_H = p.h;
 }
+
+/** A deck/slab covering the pad, inset by `k` (0..1), with optional height
+ *  so it reads as a raised platform with a visible front edge. */
+export function drawIsoDeck(
+  ctx: CanvasRenderingContext2D,
+  cx: number,
+  cy: number,
+  k: number,
+  topFill: string,
+  sideFill: string,
+  lift: number,
+): void {
+  const w = PAD_W * k,
+    h = PAD_H * k;
+  const L = lift || 0;
+  if (L > 0) {
+    // Front-facing sides (south-west and south-east faces)
+    ctx.fillStyle = sideFill;
+    ctx.beginPath();
+    ctx.moveTo(cx - w, cy - L);
+    ctx.lineTo(cx, cy + h - L);
+    ctx.lineTo(cx, cy + h);
+    ctx.lineTo(cx - w, cy);
+    ctx.closePath();
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(cx + w, cy - L);
+    ctx.lineTo(cx, cy + h - L);
+    ctx.lineTo(cx, cy + h);
+    ctx.lineTo(cx + w, cy);
+    ctx.closePath();
+    ctx.fill();
+  }
+  ctx.beginPath();
+  ctx.moveTo(cx, cy - h - L);
+  ctx.lineTo(cx + w, cy - L);
+  ctx.lineTo(cx, cy + h - L);
+  ctx.lineTo(cx - w, cy - L);
+  ctx.closePath();
+  ctx.fillStyle = topFill;
+  ctx.fill();
+}
+
+/** Perimeter fence posts + rail around the pad — instantly sells "this
+ *  whole block is the ride." */
+export function drawPadFence(ctx: CanvasRenderingContext2D, cx: number, cy: number, k: number, postColor: string, railColor: string): void {
+  const w = PAD_W * k,
+    h = PAD_H * k;
+  const corners: [number, number][] = [
+    [0, -h],
+    [w, 0],
+    [0, h],
+    [-w, 0],
+  ];
+  ctx.strokeStyle = railColor;
+  ctx.lineWidth = 1.5;
+  for (let e = 0; e < 4; e++) {
+    const a = corners[e],
+      b = corners[(e + 1) % 4];
+    for (let s = 0; s < 4; s++) {
+      const t0 = s / 4,
+        t1 = (s + 1) / 4;
+      const x0 = cx + a[0] + (b[0] - a[0]) * t0,
+        y0 = cy + a[1] + (b[1] - a[1]) * t0;
+      const x1 = cx + a[0] + (b[0] - a[0]) * t1,
+        y1 = cy + a[1] + (b[1] - a[1]) * t1;
+      ctx.beginPath();
+      ctx.moveTo(x0, y0 - 6);
+      ctx.lineTo(x1, y1 - 6);
+      ctx.stroke();
+      ctx.fillStyle = postColor;
+      ctx.fillRect(x0 - 0.75, y0 - 7, 1.5, 7);
+    }
+  }
+}
