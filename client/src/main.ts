@@ -13,6 +13,7 @@ import {
 } from './sim/staff';
 import { OBJECTIVES, checkObjectives as checkObjectivesSim } from './sim/objectives';
 import { processRideQueues as processRideQueuesSim } from './sim/rides';
+import { createGuest, updateGuest as updateGuestSim } from './sim/guests';
 import { createApi } from './net/client';
 import { mountAuthUI } from './ui/auth';
 import { getPlaytimeMs, startPlaytimeTracking, ensureAtLeast as ensurePlaytimeAtLeast } from './save/playtime';
@@ -1162,6 +1163,11 @@ const GUEST_FIRST = ['Ava','Ben','Cleo','Dev','Elle','Finn','Gia','Hugo','Iris',
 const GUEST_LAST = ['Alvarez','Brooks','Chen','Diaz','Evans','Farr','Gupta','Hale','Ito','Jensen','Kaur','Lund','Moss','Novak','Owens','Park','Quist','Reyes','Silva','Tran','Vega','Walsh'];
 
 
+// The sim-owned fields (position, needs, happiness, queueing, ...) and the
+// update() logic that mutates them now live in sim/guests.ts (phase 4) as a
+// plain interface + pure function -- this class spreads that data on
+// construction and delegates update() to it, keeping only the display-only
+// fields (color, balloonColor, name) and draw() here until render/ splits out.
 class Guest {
     x: number; y: number;
     targetX: number; targetY: number;
@@ -1178,173 +1184,17 @@ class Guest {
     money: number;
 
     constructor(startX, startY) {
-        this.x = startX;
-        this.y = startY;
-        this.targetX = startX;
-        this.targetY = startY;
-        this.progress = 1;
-        this.speed = 0.01 + (Math.random() * 0.02);
+        Object.assign(this, createGuest(startX, startY));
         this.color = ['#ef4444', '#3b82f6', '#eab308', '#ec4899', '#8b5cf6', '#10b981', '#f97316'][Math.floor(Math.random()*7)];
-        this.lastX = startX;
-        this.lastY = startY;
-        this.happiness = 50 + Math.floor(Math.random() * 20); // 50-70 starting
-        this.ridesRidden = 0;
-        this.queuedAt = null;   // "ax,ay" if queued
-        this.queueTimer = 0;
-        // Needs (0 = satisfied, 100 = desperate)
-        this.hunger = 20 + Math.random() * 30;
-        this.thirst = 20 + Math.random() * 30;
-        this.bladder = 10 + Math.random() * 20;
-        this.hasBalloon = false;
         this.balloonColor = FIREWORK_COLORS[Math.floor(Math.random() * FIREWORK_COLORS.length)];
         this.name = GUEST_FIRST[Math.floor(Math.random() * GUEST_FIRST.length)] + ' ' + GUEST_LAST[Math.floor(Math.random() * GUEST_LAST.length)];
-        this.money = 25 + Math.floor(Math.random() * 60);
     }
 
     update() {
-        // Needs creep up; unmet needs erode happiness. Driven by content/needs.ts
-        // rather than a hardcoded list, so a new need is a data change.
-        for (const need of NEEDS) {
-            const level = Math.min(100, this[need.id] + need.growth);
-            this[need.id] = level;
-            if (level > need.painAbove) this.happiness = Math.max(0, this.happiness - need.painRate);
-        }
-        if (S.weather === 'rain') this.happiness = Math.max(0, this.happiness - 0.005);
-        // Filth is depressing; a bench underfoot is a nice rest
-        const filth = litterAt(S, this.x, this.y);
-        if (filth) this.happiness = Math.max(0, this.happiness - 0.02 * filth);
-
-        // If queued at a ride, wait
-        if (this.queuedAt) {
-            this.queueTimer++;
-            if (this.queueTimer > 200) {
-                // Impatient — leave queue
-                this.happiness = Math.max(0, this.happiness - 15);
-                const q = S.rideQueues[this.queuedAt];
-                if (q) q.queue = Math.max(0, q.queue - 1);
-                this.queuedAt = null;
-                this.queueTimer = 0;
-            }
-            return;
-        }
-
-        if (this.progress >= 1) {
-            this.x = this.targetX;
-            this.y = this.targetY;
-
-            // Shop next door? Buy if the need is real.
-            const shopDirs = [[0,1],[1,0],[0,-1],[-1,0]];
-            for (let d of shopDirs) {
-                const nx = this.x + d[0], ny = this.y + d[1];
-                if (nx < 0 || nx >= S.gridSize || ny < 0 || ny >= S.gridSize) continue;
-                const cell = S.map[nx][ny];
-                if (cell && SHOP_TYPES.has(cell)) {
-                    const sd = BUILD_DATA[cell];
-                    // The shop declares which need it serves; the need declares
-                    // when to buy, what it resets to, and whether it litters.
-                    const need = sd.shop ? NEED_BY_ID[sd.shop] : undefined;
-                    let bought = false;
-                    if (need) {
-                        if (this[need.id] > need.buyAbove) { this[need.id] = need.resetTo; bought = true; }
-                    } else if (sd.shop === 'balloon' && !this.hasBalloon && Math.random() < BALLOON_BUY_CHANCE) {
-                        this.hasBalloon = true;
-                        this.happiness = Math.min(100, this.happiness + BALLOON_HAPPINESS);
-                        bought = true;
-                    }
-                    if (bought && this.money >= sd.price) {
-                        earn(sd.price, 'shops');
-                        this.money -= sd.price;
-                        S.shopSales++;
-                        if (need?.litters) dropLitter(S, this.x, this.y);
-                        const sk = `${nx},${ny}`;
-                        if (!S.shopStats[sk]) S.shopStats[sk] = { sales: 0, earned: 0 };
-                        S.shopStats[sk].sales++;
-                        S.shopStats[sk].earned += sd.price;
-                        this.happiness = Math.min(100, this.happiness + 6);
-                        if (Math.random() > 0.85) logEvent(`A guest spent $${sd.price} at ${S.rideNames[sk] || cell}.`, 'good');
-                        break;
-                    }
-                }
-            }
-
-            // Check if adjacent to a ride — chance to queue
-            if (Math.random() < 0.15) {
-                const dirs = [[0,1],[1,0],[0,-1],[-1,0]];
-                for (let d of dirs) {
-                    const nx = this.x + d[0], ny = this.y + d[1];
-                    if (nx >= 0 && nx < S.gridSize && ny >= 0 && ny < S.gridSize) {
-                        const cell = S.map[nx][ny];
-                        if (cell && RIDE_TYPES.has(cell)) {
-                            // Find anchor
-                            const key = S.anchorOf[`${nx},${ny}`];
-                            const aKey = key ? `${key.ax},${key.ay}` : `${nx},${ny}`;
-                            const q = S.rideQueues[aKey];
-                            if (q && !q.broken && q.queue < BUILD_DATA[cell].capacity * 2) {
-                                q.queue++;
-                                this.queuedAt = aKey;
-                                this.queueTimer = 0;
-                                return;
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Occasionally drop trash while strolling
-            if (Math.random() < 0.006 && S.map[this.x]?.[this.y] === 'path') dropLitter(S, this.x, this.y);
-
-            // Normal path wandering
-            let neighbors = [];
-            const dirs = [[0,1],[1,0],[0,-1],[-1,0]];
-            for (let d of dirs) {
-                let nx = this.x + d[0];
-                let ny = this.y + d[1];
-                if (nx >= 0 && nx < S.gridSize && ny >= 0 && ny < S.gridSize) {
-                    if (S.map[nx][ny] === 'path' || S.map[nx][ny] === 'entrance') {
-                        neighbors.push({x: nx, y: ny});
-                    }
-                }
-            }
-
-            if (neighbors.length > 0) {
-                let next = neighbors[Math.floor(Math.random() * neighbors.length)];
-                if (neighbors.length > 1 && next.x === this.lastX && next.y === this.lastY) {
-                    next = neighbors.find(n => n.x !== this.lastX || n.y !== this.lastY) || next;
-                }
-                this.lastX = this.x;
-                this.lastY = this.y;
-                this.targetX = next.x;
-                this.targetY = next.y;
-                this.progress = 0;
-            }
-
-            // Scenery happiness boost — check surroundings
-            const dirs2 = [[0,1],[1,0],[0,-1],[-1,0],[1,1],[-1,1],[1,-1],[-1,-1]];
-            for (let d of dirs2) {
-                const nx = this.x + d[0], ny = this.y + d[1];
-                if (nx >= 0 && nx < S.gridSize && ny >= 0 && ny < S.gridSize) {
-                    const cell = S.map[nx][ny];
-                    if (cell && SCENERY_TYPES.has(cell)) {
-                        this.happiness = Math.min(100, this.happiness + 0.3);
-                    }
-                }
-            }
-
-            // Night penalty if no lamps nearby
-            if (isNight) {
-                let hasLamp = false;
-                for (let d of dirs2) {
-                    const nx = this.x + d[0], ny = this.y + d[1];
-                    if (nx >= 0 && nx < S.gridSize && ny >= 0 && ny < S.gridSize && S.map[nx][ny] === 'lamp') {
-                        hasLamp = true; break;
-                    }
-                }
-                if (!hasLamp) this.happiness = Math.max(0, this.happiness - 0.5);
-            }
-
-        } else {
-            this.progress += this.speed;
-        }
+        // Cast: this class carries display fields (color, name, balloonColor)
+        // sim/guests.ts's Guest interface doesn't know about, on top of the
+        // sim-owned fields it does -- see the class comment above.
+        for (const e of updateGuestSim(S, this as any)) logEvent(e.msg, e.type);
     }
 
     draw() {
