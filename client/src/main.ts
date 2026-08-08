@@ -28,6 +28,11 @@ import {
     inspectedKey, inspectedGuest,
 } from './ui/inspectors';
 import { isUnlocked as isUnlockedSim, renderPalette as renderPaletteSim, refreshPalette as refreshPaletteSim } from './ui/palette';
+import { TILE_W, TILE_H, toScreen, camOffset as camOffsetImpl, toMap as toMapImpl } from './render/camera';
+import {
+    drawPoly as drawPolyImpl, drawPolyN as drawPolyNImpl, drawGroundShadow as drawGroundShadowImpl,
+    blockCenter, padHalf, setPad, PAD_W, PAD_H,
+} from './render/iso';
 import { createApi } from './net/client';
 import { mountAuthUI } from './ui/auth';
 import { getPlaytimeMs, startPlaytimeTracking, ensureAtLeast as ensurePlaytimeAtLeast } from './save/playtime';
@@ -81,9 +86,6 @@ const nightOverlay = document.getElementById('night-overlay');
 // -- camera, current tool, speed, open panels, audio, undo, transient FX --
 // stays module-level below until phase 4 gives it homes in ui/ and render/.
 const S = createGameState();
-
-const TILE_W = 64;
-const TILE_H = 32;
 
 // RCT-style park entrance: a fixed 3-tile-wide gate on the west edge that the
 // player can never build on or bulldoze. Guests spawn at its centre tile.
@@ -890,89 +892,21 @@ function economyTick() {
 }
 
 // ────── Math & Drawing Functions ──────
-// toScreen returns WORLD-space px (camera transform is applied in render);
-// toMap converts raw screen px → grid coords, accounting for zoom/pan.
-
-function camOffset() {
-    return { x: canvas.width / 2 + panX, y: canvas.height / 4 + 50 + panY };
-}
-
-function toScreen(mapX, mapY) {
-    const x = (mapX - mapY) * (TILE_W / 2);
-    const y = (mapX + mapY) * (TILE_H / 2);
-    return { x, y };
-}
-
-function toMap(screenX, screenY) {
-    const o = camOffset();
-    const adjX = (screenX - o.x) / zoom;
-    const adjY = (screenY - o.y) / zoom;
-    // The inverse transform maps each tile's diamond onto a unit SQUARE
-    // centered on its integer coords, so round (not floor) is the exact
-    // hit test — floor only resolved the bottom quadrant correctly and
-    // shifted the other three a tile back.
-    const mapX = Math.round((adjX / (TILE_W / 2) + adjY / (TILE_H / 2)) / 2);
-    const mapY = Math.round((adjY / (TILE_H / 2) - adjX / (TILE_W / 2)) / 2);
-    return { x: mapX, y: mapY };
-}
-
-function drawPoly(x, y, color, borderColor = null) {
-    ctx.beginPath();
-    ctx.moveTo(x, y - TILE_H / 2);
-    ctx.lineTo(x + TILE_W / 2, y);
-    ctx.lineTo(x, y + TILE_H / 2);
-    ctx.lineTo(x - TILE_W / 2, y);
-    ctx.closePath();
-    ctx.fillStyle = color;
-    ctx.fill();
-    if (borderColor) {
-        ctx.strokeStyle = borderColor;
-        ctx.lineWidth = 1;
-        ctx.stroke();
-    }
-}
-
-// Center of an n×n block, and its diamond half-extents
-function blockCenter(ax, ay, sz) { return toScreen(ax + (sz - 1) / 2, ay + (sz - 1) / 2); }
-function padHalf(sz) { return { w: TILE_W * sz / 2, h: TILE_H * sz / 2 }; }
-
-// Draw an n×n diamond footprint (multi-tile base pad)
-function drawPolyN(ax, ay, sz, color, borderColor = null) {
-    const c = blockCenter(ax, ay, sz);
-    const { w, h } = padHalf(sz);
-    ctx.beginPath();
-    ctx.moveTo(c.x, c.y - h);   // top
-    ctx.lineTo(c.x + w, c.y);   // right
-    ctx.lineTo(c.x, c.y + h);   // bottom
-    ctx.lineTo(c.x - w, c.y);   // left
-    ctx.closePath();
-    ctx.fillStyle = color;
-    ctx.fill();
-    if (borderColor) {
-        ctx.strokeStyle = borderColor;
-        ctx.lineWidth = 1;
-        ctx.stroke();
-    }
-}
-
-// ────── Procedural Object Renderers ──────
-
-// Soft ambient-occlusion ellipse under objects — cheap depth for everything
-function drawGroundShadow(cx, cy, w) {
-    ctx.beginPath();
-    ctx.ellipse(cx, cy + 2, w, w * 0.42, 0, 0, Math.PI * 2);
-    ctx.fillStyle = 'rgba(0,0,0,0.16)';
-    ctx.fill();
-}
-
-// ── Multi-tile footprint helpers ──
-// An n×n pad is a diamond reaching TILE_W*n/2 horizontally and TILE_H*n/2
-// vertically from its center. Rides are authored against these so
-// structures genuinely occupy their block instead of floating on it.
-// PAD_W/PAD_H track the block currently being drawn (set in pass 2).
-let PAD_W = TILE_W;   // half-width of the current pad diamond
-let PAD_H = TILE_H;   // half-height
-function setPad(sz) { const p = padHalf(sz); PAD_W = p.w; PAD_H = p.h; }
+// toScreen/camOffset/toMap moved to render/camera.ts, drawPoly/blockCenter/
+// padHalf/drawPolyN/drawGroundShadow/PAD_W/PAD_H/setPad to render/iso.ts
+// (phase 4) -- the first render/ slice, and the one that actually pays off
+// the "pass ctx explicitly" blocker ARCHITECTURE.md §8 flags: every draw
+// function below now takes ctx as its first argument instead of closing
+// over the module-level canvas context. toScreen/blockCenter/padHalf/
+// setPad keep identical signatures and are imported directly, no wrapper
+// needed; camOffset/toMap/drawPoly/drawPolyN/drawGroundShadow need thin
+// wrappers here since camera state (zoom/panX/panY) and ctx itself are
+// still main.ts residents.
+function camOffset() { return camOffsetImpl(canvas, panX, panY); }
+function toMap(screenX, screenY) { return toMapImpl(screenX, screenY, canvas, zoom, panX, panY); }
+function drawPoly(x, y, color, borderColor = null) { drawPolyImpl(ctx, x, y, color, borderColor); }
+function drawPolyN(ax, ay, sz, color, borderColor = null) { drawPolyNImpl(ctx, ax, ay, sz, color, borderColor); }
+function drawGroundShadow(cx, cy, w) { drawGroundShadowImpl(ctx, cx, cy, w); }
 
 // A deck/slab covering the pad, inset by `k` (0..1), with optional height
 // so it reads as a raised platform with a visible front edge.
