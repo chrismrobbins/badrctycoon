@@ -79,6 +79,15 @@ export interface GameState {
   /** map[x][y] -- tile type id or null. */
   map: Cell[][];
   /** "x,y" -> the anchor tile of the multi-tile structure occupying it. */
+  /**
+   * Tile -> owning anchor, for multi-tile attractions.
+   *
+   * DERIVED, NOT PERSISTED. It is a cache of what `map` already says, rebuilt
+   * by sim/anchors.ts's rebuildAnchors() on load and after every mutation, and
+   * stripped by save/schema.ts's serialize(). Do not assign to it anywhere
+   * else -- a second copy that can disagree with `map` is exactly the class of
+   * bug ARCHITECTURE.md §3.5 removed for rating/builtValue.
+   */
   anchorOf: Record<string, Anchor>;
   landPurchased: number;
 

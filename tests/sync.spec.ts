@@ -29,7 +29,7 @@ function fakeServer() {
   });
 
   const api = {
-    async saveSlot(slot, payload) {
+    async saveSlot(slot: number, payload: { baseRevision: number; parkName: string; state: GameState }) {
       putCount++;
       if (offline) throw new ApiError(0, 'network_unreachable', 'offline');
       const existing = slots.get(slot);
@@ -41,18 +41,18 @@ function fakeServer() {
       slots.set(slot, { meta, state: JSON.parse(JSON.stringify(payload.state)) });
       return meta;
     },
-    async loadSlot(slot) {
+    async loadSlot(slot: number) {
       const row = slots.get(slot);
       if (!row) throw new ApiError(404, 'not_found', 'no such slot');
       return { meta: row.meta, state: row.state };
     },
     async listSlots() { return [...slots.values()].map((r) => r.meta); },
-    async deleteSlot(slot) { slots.delete(slot); },
-    async me() { return null; },
+    async deleteSlot(slot: number) { slots.delete(slot); },
+    async me(): Promise<null> { return null; },
     async register() { throw new Error('unused'); },
     async login() { throw new Error('unused'); },
     async logout() {},
-    async leaderboard() { return []; },
+    async leaderboard(): Promise<unknown[]> { return []; },
   } as unknown as Api;
 
   return {

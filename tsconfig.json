@@ -11,8 +11,12 @@
     // each one as it lands. Turning `strict` on now would stall the port on
     // hundreds of annotations that the split is about to invalidate.
     // Ratchet order once modules exist: noImplicitAny -> strictNullChecks -> strict.
+    // noImplicitAny is ON as of the phase-6 cleanup (159 errors fixed, almost all
+    // of them un-annotated params in main.ts's phase-4 wrappers). strictNullChecks
+    // is next and is the bigger job -- see PHASE4-HANDOFF §5 for the narrowing
+    // quirk it interacts with.
     "strict": false,
-    "noImplicitAny": false,
+    "noImplicitAny": true,
     "strictNullChecks": false,
 
     "allowJs": true,

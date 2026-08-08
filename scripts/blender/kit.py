@@ -364,6 +364,13 @@ def render_all(scene, spec, build_fn, out_root, blend_root=None):
     """
     out = os.path.join(out_root, spec["id"])
     os.makedirs(out, exist_ok=True)
+    # Purge previous frames first. Lowering `frames` or `variants` otherwise
+    # leaves orphans behind, and pack-strip.mjs counts files -- so the next
+    # pack fails with "meta says 32 images, found 40" and the cause (a stale
+    # render, not a bad manifest) is not obvious from the message.
+    for stale in os.listdir(out):
+        if stale.endswith(".png"):
+            os.remove(os.path.join(out, stale))
     frames = spec.get("frames", 1)
     variants = spec.get("variants", 1)
     # How many camera angles this attraction actually needs. Radially

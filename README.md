@@ -16,8 +16,9 @@ npm test           # Playwright smoke suite
 
 | | |
 |---|---|
-| **Left-drag** | Move the map. Click without dragging to build or inspect |
-| **Shift+drag** | Paint a run of the armed tool (what left-drag used to do) |
+| **Left-drag**, no tool | Move the map; click to inspect |
+| **Left-drag**, tool armed | Place a run of that tool |
+| **Shift+drag** | Always pans, even with a tool armed |
 | Click the armed tool again | Leave build mode. A new park starts with no tool armed |
 | Screen edge | Edge-scroll (toggle in the camera HUD, remembered) |
 | **WASD** / arrows | Pan (hold — speed scales with zoom) |
@@ -30,7 +31,7 @@ npm test           # Playwright smoke suite
 
 ## Status
 
-**Phases 0–5 done; phase 6 partial.** Typecheck clean, 61 tests (55 pass with no backend
+**Phases 0–8 done.** Typecheck clean, 61 tests (55 pass with no backend
 running locally, all 61 pass with `npm run worker:dev` up).
 
 | Phase | | |
@@ -41,7 +42,7 @@ running locally, all 61 pass with `npm run worker:dev` up).
 | 3 | ✅ | Content registry — nine hand-synced tables collapsed to one |
 | 4 | ✅ | Full split: `sim/`, `ui/`, `render/` all out of `main.ts`. Every draw function is `ctx`-explicit; `sim/` is headless (checked by `npm run lint`, not real ESLint -- see ARCHITECTURE §8 for why) |
 | 5 | ✅ | One fixed-timestep clock; pause and frame-rate bugs fixed |
-| 6 | ◐ | Migration chain landed with phase 2. Litter-leak-on-bulldoze fixed; redundant `anchorOf` in the save still open |
+| 6 | ✅ | Migration chain landed with phase 2. Litter-leak-on-bulldoze fixed; redundant `anchorOf` no longer persisted — derived from the map on load ([sim/anchors.ts](client/src/sim/anchors.ts)) |
 | 7–8 | | Postgres + API, accounts and up to 12 saved parks per player -- **done, see Backend below** |
 
 Bugs fixed along the way: reloading no longer empties a busy park; a version bump no longer
@@ -176,16 +177,16 @@ Three rules the pipeline enforces so this can't rot:
 `tests/sprites.spec.ts` imports the generated table and fails if any PNG's real dimensions
 disagree with it, which is the failure a screenshot test sails straight past.
 
-**Cost: 2.4 MB of sheets** (22 sheets, including guests and staff) against a ~140 KB JS bundle. Sheets are packed to a 256-colour
+**Cost: 2.2 MB of sheets** (23 sheets, including guests, staff and the gate) against a ~140 KB JS bundle. Sheets are packed to a 256-colour
 palette: these are flat-shaded renders of a handful of materials, so quantising is near-lossless
 (measured mean error 1–2/255, indistinguishable side by side) for ~25% of the bytes — 2.9 MB
 truecolour became 0.75 MB. **128 colours is not safe**: it visibly dithers the large flat
 gradients on the ride pads. Because the palette did the work, no sprite had to give up animation
 frames to pay for it.
 
-Rotation is what took the total from 0.87 MB to 2.4 MB — eleven attractions now ship four angles
-each. The ferris wheel alone is 802 KB (12 frames × 4 angles × 176×272 × 2×); dropping it to 8
-frames would save ~270 KB if that ever matters.
+Rotation is what took the total up — eleven attractions ship four angles each. The ferris wheel
+was the outlier at 821 KB and is now 489 KB, cut from 12 animation frames to 8; at four angles a
+frame costs four times what it does elsewhere, so that is where the trim was worth making.
 
 ## Where this is going
 

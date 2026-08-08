@@ -1397,7 +1397,7 @@ MANIFEST = [
     dict(id="ship",         tiles=2, rot=4, w=176, h=208, frames=16, variants=1, build=build_ship),
     dict(id="haunted",      tiles=2, rot=4, w=176, h=176, frames=1,  variants=1, build=build_haunted),
     dict(id="gokarts",      tiles=2, rot=4, w=176, h=144, frames=12, variants=1, build=build_gokarts),
-    dict(id="ferriswheel",  tiles=2, rot=4, w=176, h=272, frames=12, variants=1, build=build_ferriswheel),
+    dict(id="ferriswheel",  tiles=2, rot=4, w=176, h=272, frames=8, variants=1, build=build_ferriswheel),
     dict(id="coaster",      tiles=2, rot=4, w=176, h=208, frames=12, variants=1, build=build_coaster),
     # guests -- not a tile attraction; 7 shirt colours x 4 walk directions
     dict(id="guest",        tiles=1, w=48,  h=64,  frames=6,

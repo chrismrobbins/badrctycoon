@@ -112,7 +112,9 @@ export function renderRideStats(state: GameState): void {
 }
 
 // ── Guest inspector panel ──
-interface GuestLike {
+/** Exported so main.ts can type its openGuestPanel wrapper against the same
+ *  shape rather than widening to `any` at the boundary. */
+export interface GuestLike {
   name: string;
   color: string;
   happiness: number;

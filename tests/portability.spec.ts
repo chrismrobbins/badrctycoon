@@ -115,7 +115,7 @@ test('rating and builtValue are absent from a fresh state', () => {
 });
 
 test('migrations run server-side, for backfills and validation', () => {
-  const legacy = { v: 5, map: [[null]], gridSize: 1, funds: 4242 };
+  const legacy = { v: 5, map: [[null]] as (string | null)[][], gridSize: 1, funds: 4242 };
   const migrated = migrate(legacy)!;
 
   expect(migrated).not.toBeNull();

@@ -36,6 +36,7 @@ import {
 } from './render/iso';
 import { simClock, isNight, advanceSimClock, setIsNight } from './render/clock';
 import { drawEntrance as drawEntranceImpl, drawEntranceNight as drawEntranceNightImpl, drawParkFence as drawParkFenceImpl } from './render/sprites/scenery';
+import { rebuildAnchors } from './sim/anchors';
 import { SPRITES } from './render/sprites';
 import {
     setRotationAngle, setGridSize, rotation, rotationAngle, depthOf, blockCorners,
@@ -69,6 +70,9 @@ import {
     NEEDS, NEED_BY_ID, BALLOON_BUY_CHANCE, BALLOON_HAPPINESS,
     STAFF_KINDS, MARKETING_CAMPAIGNS,
 } from './content';
+import type { StaffKindId, MarketingCampaignId } from './content';
+import type { Staff } from './sim/staff';
+import type { GuestLike } from './ui/inspectors';
 
 // ---------------------------------------------------------------------------
 // PHASE 1: this file is the monolith's <script> block moved verbatim out of
@@ -114,13 +118,13 @@ const S = createGameState();
 const ENTRANCE_X = 0;
 const ENTRANCE_Y = 7;                    // centre of the gate — never moves
 const ENTRANCE_TILES = [[0, 6], [0, 7], [0, 8]];
-function isEntranceTile(x, y) { return x === ENTRANCE_X && y >= ENTRANCE_Y - 1 && y <= ENTRANCE_Y + 1; }
+function isEntranceTile(x: number, y: number) { return x === ENTRANCE_X && y >= ENTRANCE_Y - 1 && y <= ENTRANCE_Y + 1; }
 
 // null means NO tool armed -- look-and-pan mode, and the state a new park
 // starts in. The game used to boot straight into build mode with Path armed,
 // so the very first click on the map laid a path whether you meant it or not.
 // Clicking an armed tool again returns here (see setTool/clearTool).
-let currentTool = null;
+let currentTool: string | null = null;
 let gameSpeed = 1;       // 0 = paused, 1 = normal, 3 = fast
 
 // Camera
@@ -179,9 +183,9 @@ let fireworksTimer = 0;           // ticks remaining in the show
 // main.ts fully -- both call saveGame()/buildInCell(), which are still
 // main.ts residents, and moving them would mean ui/inspectors.ts importing
 // back from here.
-function nextName(type) { return nextNameSim(type, S); }
-function anchorKeyAt(x, y) { return anchorKeyAtSim(S, x, y); }
-function openRidePanel(key) { openRidePanelSim(S, key); }
+function nextName(type: string) { return nextNameSim(type, S); }
+function anchorKeyAt(x: number, y: number) { return anchorKeyAtSim(S, x, y); }
+function openRidePanel(key: string) { openRidePanelSim(S, key); }
 function renderRideStats() { renderRideStatsSim(S); }
 
 function renameRandom() {
@@ -208,12 +212,26 @@ function demolishInspected() {
 //  PARK SYSTEMS — staff, litter, economy, research, awards
 // ═══════════════════════════════════════════════════════════
 
-let undoStack = [];
+/**
+ * One reversible action. `refund`/`name` only exist on demolish entries -- a
+ * build has nothing to refund and the ride wasn't named yet.
+ */
+interface UndoEntry {
+    kind: 'build' | 'demolish';
+    type: string;
+    cells: { x: number; y: number }[];
+    cost: number;
+    key: string;
+    refund?: number;
+    name?: string;
+}
+
+let undoStack: UndoEntry[] = [];
 
 // Research — rides unlock in order as you invest
 
 
-function isUnlocked(tool) { return isUnlockedSim(S, tool); }
+function isUnlocked(tool: string) { return isUnlockedSim(S, tool); }
 
 // Ledger — sim/finance.ts is the only thing allowed to write S.funds. These are
 // thin bindings so the ~40 existing call sites keep reading the same.
@@ -229,7 +247,7 @@ const unspend = (amount: number, bucket: Fin.ExpenseBucket) => Fin.unspend(S, am
 // moved to sim/staff.ts (phase 4). hireStaff/fireStaff stay here as thin
 // wrappers -- the event-log/sound/UI-refresh calls are ui/render concerns
 // that haven't moved yet, same pattern as evaluateAwards() above.
-function hireStaff(kind) {
+function hireStaff(kind: StaffKindId) {
     const result = hireStaffSim(S, kind);
     if (result.ok === false) {
         logEvent(
@@ -243,7 +261,7 @@ function hireStaff(kind) {
     sfx('hire');
 }
 
-function fireStaff(kind) {
+function fireStaff(kind: StaffKindId) {
     const removed = fireStaffSim(S, kind);
     if (!removed) return;
     logEvent(`${removed.name} (${STAFF_KINDS[kind].label}) has left the park.`, 'info');
@@ -252,8 +270,8 @@ function fireStaff(kind) {
 
 // Drawn per-worker so staff can join the scene's depth sort
 // drawStaffOne/drawLitterAt moved to render/entities.ts (phase 4).
-function drawStaffOne(w) { drawStaffOneImpl(ctx, w); }
-function drawLitterAt(x, y, sx, sy) { drawLitterAtImpl(ctx, S, x, y, sx, sy); }
+function drawStaffOne(w: Staff) { drawStaffOneImpl(ctx, w); }
+function drawLitterAt(x: number, y: number, sx: number, sy: number) { drawLitterAtImpl(ctx, S, x, y, sx, sy); }
 
 // ── Awards ──
 // Predicates, AWARD_DEFS and evaluateAwards() itself now live in sim/awards.ts
@@ -270,7 +288,7 @@ function evaluateAwards() {
 }
 
 // ── Undo ──
-function pushUndo(entry) {
+function pushUndo(entry: UndoEntry) {
     undoStack.push(entry);
     if (undoStack.length > 25) undoStack.shift();
 }
@@ -280,7 +298,7 @@ function undoLast() {
     if (!e) { logEvent('Nothing left to undo.', 'info'); return; }
     if (e.kind === 'build') {
         // Remove what was built and refund the full cost
-        for (const c of e.cells) { S.map[c.x][c.y] = null; delete S.anchorOf[`${c.x},${c.y}`]; }
+        for (const c of e.cells) { S.map[c.x][c.y] = null; }
         unspend(e.cost, 'construction');   // reverse the build; do not book it as income
         delete S.rideQueues[e.key];
         delete S.rideNames[e.key];
@@ -291,7 +309,7 @@ function undoLast() {
         // Restore what was demolished and take back the refund
         for (const c of e.cells) {
             S.map[c.x][c.y] = e.type;
-            if (e.cells.length > 1) S.anchorOf[`${c.x},${c.y}`] = { ax: e.cells[0].x, ay: e.cells[0].y };
+
         }
         unearn(e.refund, 'refunds');        // reverse the demolition refund
         if (RIDE_TYPES.has(e.type)) {
@@ -300,12 +318,15 @@ function undoLast() {
         if (e.name) S.rideNames[e.key] = e.name;
         logEvent(`Restored ${e.name || TYPE_LABEL[e.type] || e.type}.`, 'info');
     }
+    // Both branches edited the map; re-derive once rather than per branch.
+    rebuildAnchors(S);
     updateUI();
     saveGame();
 }
 
 // ── Sound (synthesized, no assets) ──
-let audioCtx = null, soundOn = false, ambienceNodes = null;
+let audioCtx: AudioContext | null = null, soundOn = false,
+    ambienceNodes: { src: AudioBufferSourceNode; gain: GainNode; lp: BiquadFilterNode } | null = null;
 
 function toggleSound() {
     soundOn = !soundOn;
@@ -354,10 +375,10 @@ function stopAmbience() {
     ambienceNodes = null;
 }
 
-function sfx(kind) {
+function sfx(kind: string) {
     if (!soundOn || !audioCtx) return;
     const now = audioCtx.currentTime;
-    const tone = (freq, dur, type?, vol?, delay?) => {
+    const tone = (freq: number, dur: number, type: OscillatorType, vol: number, delay = 0) => {
         const o = audioCtx.createOscillator(), g = audioCtx.createGain();
         o.type = type || 'sine'; o.frequency.value = freq;
         const t0 = now + (delay || 0);
@@ -392,27 +413,27 @@ function sfx(kind) {
 // sites throughout this file already use; `mgmtTab` is imported directly
 // since main.ts only ever reads it (hireStaff/fireStaff wrappers, the 'm'
 // keyboard shortcut) -- ui/management.ts is the only writer.
-function openMgmt(tab?) { openMgmtSim(S, tab); }
+function openMgmt(tab?: string) { openMgmtSim(S, tab); }
 function closeMgmt() { closeMgmtSim(); }
 function renderMgmt() { renderMgmtSim(S); }
 
 function perceivedValue() { return perceivedValueSim(S); }
-function setAdmission(v) {
+function setAdmission(v: string) {
     S.admissionPrice = parseInt(v, 10);
     const lbl = document.getElementById('price-label');
     if (lbl) lbl.textContent = money(S.admissionPrice);
     saveGame();
 }
-function setResearchBudget(v) { S.research.budget = parseInt(v, 10); renderMgmt(); saveGame(); }
+function setResearchBudget(v: string) { S.research.budget = parseInt(v, 10); renderMgmt(); saveGame(); }
 
-function borrow(amount) {
+function borrow(amount: number) {
     if (S.loanBalance + amount > LOAN_LIMIT) { logEvent('Your credit limit is maxed out.', 'bad'); sfx('error'); return; }
     S.loanBalance += amount;
     earn(amount, 'loans');
     logEvent(`Borrowed ${money(amount)}. Interest accrues daily.`, 'info');
     sfx('money'); updateUI(); renderMgmt(); saveGame();
 }
-function repay(amount) {
+function repay(amount: number) {
     const pay = Math.min(amount, S.loanBalance);
     if (pay <= 0) { logEvent('You have no outstanding loan.', 'info'); return; }
     if (S.funds < pay) { logEvent('Not enough cash to make that repayment.', 'bad'); sfx('error'); return; }
@@ -421,7 +442,7 @@ function repay(amount) {
     logEvent(`Repaid ${money(pay)} of your loan.`, 'good');
     updateUI(); renderMgmt(); saveGame();
 }
-function startCampaign(key) {
+function startCampaign(key: MarketingCampaignId) {
     const c = MARKETING_CAMPAIGNS[key];
     if (S.funds < c.cost) { logEvent(`Not enough cash for the ${c.label}.`, 'bad'); sfx('error'); return; }
     spend(c.cost, 'marketing');
@@ -442,7 +463,7 @@ function refreshPalette() { refreshPaletteSim(S); }
 // (phase 4). guestAtScreen stays -- it's a click hit-test against the
 // camera transform (toScreen/zoom/camOffset), render/interaction territory
 // that hasn't moved yet, not an inspector-panel concern.
-function guestAtScreen(sx, sy) {
+function guestAtScreen(sx: number, sy: number) {
     let best = null, bestD = 22;
     for (const g of S.visualGuests) {
         if (g.queuedAt) continue;
@@ -456,7 +477,7 @@ function guestAtScreen(sx, sy) {
     return best;
 }
 
-function openGuestPanel(g) { openGuestPanelSim(S, g); }
+function openGuestPanel(g: Guest) { openGuestPanelSim(S, g as unknown as GuestLike); }
 function renderGuestStats() { renderGuestStatsSim(S); }
 
 // ═══════════════════════════════════════════════════════════
@@ -519,14 +540,14 @@ function hydrateEntities() {
     );
 
     // Staff keep identity and position; everything else is recomputed.
-    S.staff = (S.staff as any[])
-        .filter((w) => w && STAFF_KINDS[w.kind])
+    S.staff = (S.staff as Staff[])
+        .filter((w) => w && STAFF_KINDS[w.kind as StaffKindId])
         .map((w) => ({
             ...w,
             tx: w.x, ty: w.y, progress: 1,
             speed: 0.024 + Math.random() * 0.012,
-            task: null, swing: Math.random() * 6,
-            route: null, reroute: 0, cleaned: w.cleaned || 0,
+            task: null as string | null, swing: Math.random() * 6,
+            route: null as { x: number; y: number }[] | null, reroute: 0, cleaned: w.cleaned || 0,
             sweepFx: 0, lastX: -1, lastY: -1,
         }));
 
@@ -590,6 +611,8 @@ function buyLand() {
             if (S.map[x][y] === undefined) S.map[x][y] = null;
         }
     }
+    // The scan is bounded by gridSize, so growing the park invalidates it.
+    rebuildAnchors(S);
     logEvent(`Land purchased! Park expanded to ${S.gridSize}×${S.gridSize}. (Scroll out to see it all.)`, 'good');
     updateLandButton();
     updateUI();
@@ -602,7 +625,7 @@ function updateLandButton() {
     el.textContent = S.landPurchased >= LAND_COSTS.length ? 'SOLD OUT' : `$${LAND_COSTS[S.landPurchased].toLocaleString()}`;
 }
 
-function setSpeed(s) {
+function setSpeed(s: number) {
     gameSpeed = s;
     [0, 1, 3].forEach(v => {
         const btn = document.getElementById('speed-' + v);
@@ -630,7 +653,6 @@ if (!restored) {
 for (const [ex, ey] of ENTRANCE_TILES) {
     if (S.map[ex] && S.map[ex][ey] !== 'entrance') {
         S.map[ex][ey] = 'entrance';
-        delete S.anchorOf[`${ex},${ey}`];
     }
 }
 setInterval(saveGame, 12000);
@@ -649,7 +671,7 @@ window.addEventListener('load', resize);
 
 // ────── UI Functions ──────
 
-function setTool(tool, btnElement) {
+function setTool(tool: string, btnElement: HTMLElement | null) {
     // Clicking the armed tool again disarms it -- the fastest way out of build
     // mode is the button that got you into it, and it needs no extra UI.
     if (tool === currentTool) { clearTool(); return; }
@@ -718,7 +740,7 @@ class Guest {
      *  Display-only, like color/name -- sim/guests.ts knows nothing about it. */
     walkPhase: number;
 
-    constructor(startX, startY) {
+    constructor(startX: number, startY: number) {
         Object.assign(this, createGuest(startX, startY));
         this.color = ['#ef4444', '#3b82f6', '#eab308', '#ec4899', '#8b5cf6', '#10b981', '#f97316'][Math.floor(Math.random()*7)];
         this.balloonColor = FIREWORK_COLORS[Math.floor(Math.random() * FIREWORK_COLORS.length)];
@@ -866,13 +888,13 @@ function economyTick() {
 // wrappers here since camera state (zoom/panX/panY) and ctx itself are
 // still main.ts residents.
 function camOffset() { return camOffsetImpl(canvas, panX, panY); }
-function toMap(screenX, screenY) { return toMapImpl(screenX, screenY, canvas, zoom, panX, panY); }
-function drawPoly(x, y, color, borderColor = null) { drawPolyImpl(ctx, x, y, color, borderColor); }
-function drawPolyN(ax, ay, sz, color, borderColor = null) { drawPolyNImpl(ctx, ax, ay, sz, color, borderColor); }
-function drawGroundShadow(cx, cy, w) { drawGroundShadowImpl(ctx, cx, cy, w); }
+function toMap(screenX: number, screenY: number) { return toMapImpl(screenX, screenY, canvas, zoom, panX, panY); }
+function drawPoly(x: number, y: number, color: string, borderColor: string = null) { drawPolyImpl(ctx, x, y, color, borderColor); }
+function drawPolyN(ax: number, ay: number, sz: number, color: string, borderColor: string = null) { drawPolyNImpl(ctx, ax, ay, sz, color, borderColor); }
+function drawGroundShadow(cx: number, cy: number, w: number) { drawGroundShadowImpl(ctx, cx, cy, w); }
 
-function drawIsoDeck(cx, cy, k, topFill, sideFill, lift) { drawIsoDeckImpl(ctx, cx, cy, k, topFill, sideFill, lift); }
-function drawPadFence(cx, cy, k, postColor, railColor) { drawPadFenceImpl(ctx, cx, cy, k, postColor, railColor); }
+function drawIsoDeck(cx: number, cy: number, k: number, topFill: string, sideFill: string, lift: number) { drawIsoDeckImpl(ctx, cx, cy, k, topFill, sideFill, lift); }
+function drawPadFence(cx: number, cy: number, k: number, postColor: string, railColor: string) { drawPadFenceImpl(ctx, cx, cy, k, postColor, railColor); }
 
 // drawEntrance/drawParkFence moved to render/sprites/scenery.ts (phase 4);
 // thin wrappers since render() still calls these two directly (they're not
@@ -880,7 +902,7 @@ function drawPadFence(cx, cy, k, postColor, railColor) { drawPadFenceImpl(ctx, c
 // each, not per-cell). Every other scenery/ride/shop draw function's
 // main.ts wrapper is gone: now that render/sprites/index.ts's SPRITES table
 // imports them directly, the wrappers had no remaining caller.
-function drawEntrance(cx, cy) {
+function drawEntrance(cx: number, cy: number) {
     // Baked gate turns with the map; the vector original is the pre-decode
     // fallback, as with every other sprite. The night bulbs are an overlay on
     // top of the blit -- the gate isn't in SPRITES, so it has no automatic
@@ -897,10 +919,10 @@ function drawParkFence() { drawParkFenceImpl(ctx, S, ENTRANCE_Y); }
 // render/effects.ts (phase 4); rainAlpha/rainDrops moved with drawRainFX
 // (private to it, same as coasterPath). drawTooltip needs hoveredCell/
 // mouseX/mouseY passed explicitly -- those stay main.ts interaction state.
-function drawBreakdownSmoke(cx, cy) { drawBreakdownSmokeImpl(ctx, cx, cy); }
+function drawBreakdownSmoke(cx: number, cy: number) { drawBreakdownSmokeImpl(ctx, cx, cy); }
 function drawRainFX() { drawRainFXImpl(ctx, canvas, S.weather); }
 function drawTooltip() { drawTooltipImpl(ctx, S, canvas, hoveredCell, mouseX, mouseY); }
-function drawRideQueue(ax, ay, queueCount, sz) { drawRideQueueImpl(ctx, ax, ay, queueCount, sz); }
+function drawRideQueue(ax: number, ay: number, queueCount: number, sz: number) { drawRideQueueImpl(ctx, ax, ay, queueCount, sz); }
 
 // ────── Fireworks System ──────
 // FireworkShell/FireworkParticle and updateFireworks/drawFireworks moved to
@@ -994,7 +1016,8 @@ function render() {
                     RIDE_ACCENT[cell] || (isDark ? '#475569' : '#94a3b8'));
                 // Expansion joints, interpolated along the pad's real corners
                 // so they stay square to it while the map turns.
-                const lerp = (a, b, f) => ({ x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f });
+                type Pt = { x: number; y: number };
+                const lerp = (a: Pt, b: Pt, f: number): Pt => ({ x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f });
                 ctx.strokeStyle = 'rgba(148, 163, 184, 0.18)';
                 ctx.lineWidth = 1;
                 for (let g = 1; g < csz; g++) {
@@ -1204,15 +1227,17 @@ function render() {
 
 // ────── Interaction Logic ──────
 
-function handleInteraction(e) {
+/** Takes either kind: it branches on `e.touches` internally. */
+function handleInteraction(e: MouseEvent | TouchEvent) {
     const rect = canvas.getBoundingClientRect();
-    let clientX, clientY;
-    if (e.touches && e.touches.length > 0) {
-        clientX = e.touches[0].clientX;
-        clientY = e.touches[0].clientY;
+    let clientX: number, clientY: number;
+    const touches = 'touches' in e ? e.touches : null;
+    if (touches && touches.length > 0) {
+        clientX = touches[0].clientX;
+        clientY = touches[0].clientY;
     } else {
-        clientX = e.clientX;
-        clientY = e.clientY;
+        clientX = (e as MouseEvent).clientX;
+        clientY = (e as MouseEvent).clientY;
     }
     // Map CSS px → canvas backing-store px (guards against any scale mismatch)
     mouseX = (clientX - rect.left) * (canvas.width / rect.width);
@@ -1228,7 +1253,7 @@ function handleInteraction(e) {
     }
 }
 
-function buildInCell(x, y) {
+function buildInCell(x: number, y: number) {
     // No tool armed: look-and-pan mode, nothing to place.
     if (!currentTool) return;
     const currentCell = S.map[x][y];
@@ -1261,7 +1286,7 @@ function buildInCell(x, y) {
                 for (let dy = 0; dy < sz; dy++) {
                     cleared.push({ x: ax + dx, y: ay + dy });
                     S.map[ax+dx][ay+dy] = null;
-                    delete S.anchorOf[`${ax+dx},${ay+dy}`];
+
                     // A bulldozed path's litter entry otherwise leaks in the
                     // save forever (ARCHITECTURE.md §3.6) -- it stops
                     // affecting cleanliness the moment the tile is no longer
@@ -1293,6 +1318,8 @@ function buildInCell(x, y) {
             if (inspectedKey === sKey) closeRidePanel();
             S.map[x][y] = null;
         }
+        // Single writer: both branches cleared map tiles, so re-derive.
+        rebuildAnchors(S);
         updateUI();
         return;
     }
@@ -1330,9 +1357,11 @@ function buildInCell(x, y) {
         for (let dy = 0; dy < sz; dy++) {
             placed.push({ x: x + dx, y: y + dy });
             S.map[x+dx][y+dy] = currentTool;
-            S.anchorOf[`${x+dx},${y+dy}`] = { ax: x, ay: y };
         }
     }
+    // Single writer: derive the whole table from the map rather than patching
+    // entries here. Patching is what let the two copies drift.
+    rebuildAnchors(S);
     pushUndo({ kind: 'build', type: currentTool, cells: placed, cost: toolData.cost,
                key: `${x},${y}` });
     sfx('build');
@@ -1378,7 +1407,7 @@ function toggleEdgeScroll() {
 }
 
 /** Screen-space pan from the pointer sitting in an edge band. */
-function edgeDelta(wallMs) {
+function edgeDelta(wallMs: number) {
     if (!edgeScroll || !pointerOnCanvas || isPanning) return null;
     const r = canvas.getBoundingClientRect();
     let dx = 0, dy = 0;
@@ -1428,9 +1457,9 @@ function syncCamHud() {
 // it.
 const ROT_MS = 420;               // long enough to read, short enough not to wait
 let rotFrom = 0, rotTo = 0, rotT = 1;
-let rotPivot = null;              // the map tile held under the viewport centre
+let rotPivot: { x: number; y: number } | null = null;   // map tile held under the viewport centre
 
-function rotateView(delta) {
+function rotateView(delta: number) {
     // Chain from wherever the current turn has got to, so hammering E spins
     // continuously instead of restarting from a snapped angle each time.
     rotFrom = rotationAngle;
@@ -1442,7 +1471,7 @@ function rotateView(delta) {
 
 /** Advance the turn. `wallMs` is real time -- rotation is a camera move, so it
  *  keeps going while the game is paused. */
-function stepRotation(wallMs) {
+function stepRotation(wallMs: number) {
     if (rotT >= 1) return;
     rotT = Math.min(1, rotT + wallMs / ROT_MS);
     // Smoothstep: eases out of the old angle and into the new one, so the
@@ -1499,8 +1528,8 @@ canvas.addEventListener('mousemove', (e) => {
 });
 // Touch: one finger builds (as before), TWO fingers navigate. Without this a
 // tablet could only paint -- there was no way to pan or zoom at all.
-let pinch = null;
-function touchMid(e) {
+let pinch: { x: number; y: number; d: number } | null = null;
+function touchMid(e: TouchEvent) {
     const a = e.touches[0], b = e.touches[1];
     return { x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2,
              d: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) };
@@ -1522,25 +1551,24 @@ canvas.addEventListener('touchmove', (e) => {
     handleInteraction(e);
 }, {passive: false});
 /**
- * Left mouse: CLICK acts, DRAG pans.
+ * What left-drag does depends on whether a tool is armed.
  *
- * Left-drag used to paint continuously, which meant the most natural gesture
- * on the most-used button did the one thing you least expect on a map -- and
- * left panning stranded behind a middle click, a right click or Shift, none of
- * which anyone finds.
+ *   TOOL ARMED  -> drag paints. Laying a run of path one click at a time is
+ *                  miserable, and this is the gesture everyone reaches for.
+ *   NO TOOL     -> drag moves the map, and a click inspects.
  *
- * So the action is deferred: mousedown records where you pressed and commits
- * to nothing. Move past DRAG_SLOP and it becomes a pan; release inside it and
- * it was a click, and the build/inspect runs then. The slop matters -- without
- * it, the hand-tremor on a normal click registers as a one-pixel drag and the
- * click is swallowed.
+ * That split is why "no tool armed" had to exist as a real mode rather than a
+ * convenience: it is what frees the left button to mean two different things
+ * without a modifier. Shift+drag still pans, so build mode keeps a mouse-only
+ * way to move without disarming.
  *
- * Painting a run of path is still worth having, so it moved to Shift+drag.
- * That is the button Shift+drag used to pan with, which is now redundant given
- * plain left-drag does it.
+ * In look mode the action is DEFERRED: mousedown commits to nothing, and
+ * moving past DRAG_SLOP turns it into a pan while releasing inside it counts
+ * as a click. The slop is load-bearing -- without it the hand tremor on an
+ * ordinary click registers as a one-pixel drag and swallows the click.
  */
 const DRAG_SLOP = 4;              // px of movement before a click becomes a drag
-let pendingClick = null;          // {x, y} of a left press not yet resolved
+let pendingClick: { x: number; y: number } | null = null;   // a left press not yet resolved
 
 canvas.addEventListener('mousedown', (e) => {
     // Middle / right / Shift keep their old jobs: pan, pan, and paint.
@@ -1552,18 +1580,46 @@ canvas.addEventListener('mousedown', (e) => {
         return;
     }
     if (e.button !== 0) return;
-    if (e.shiftKey) {             // Shift+drag paints, as left-drag used to
-        isDragging = true;
+    if (e.shiftKey) {             // Shift+drag pans, even with a tool armed
+        isPanning = true;
+        panStart = { x: e.clientX, y: e.clientY };
+        syncCursor();
+        e.preventDefault();
+        return;
+    }
+
+    if (currentTool) {
+        // Build mode. Inspecting still wins over a doomed build, exactly as it
+        // did before -- clicking a finished ride should open it, not fail to
+        // place something on top of it.
+        const rect = canvas.getBoundingClientRect();
+        const csx = (e.clientX - rect.left) * (canvas.width / rect.width);
+        const csy = (e.clientY - rect.top) * (canvas.height / rect.height);
+        if (currentTool !== 'bulldozer') {
+            const g = guestAtScreen(csx, csy);
+            if (g) { openGuestPanel(g); return; }
+            const gp = toMap(csx, csy);
+            if (gp.x >= 0 && gp.y >= 0 && gp.x < S.gridSize && gp.y < S.gridSize) {
+                const cell = S.map[gp.x]?.[gp.y];
+                if (cell && (RIDE_TYPES.has(cell) || SHOP_TYPES.has(cell))) {
+                    openRidePanel(anchorKeyAt(gp.x, gp.y));
+                    return;
+                }
+            }
+        }
+        isDragging = true;        // drag from here on paints
         handleInteraction(e);
         return;
     }
+
+    // Look mode: decide on mouseup whether that was a click or a drag.
     pendingClick = { x: e.clientX, y: e.clientY };
     panStart = { x: e.clientX, y: e.clientY };
     e.preventDefault();
 });
 
 /** Run what a left CLICK means at this screen point: inspect, or build. */
-function resolveClick(e) {
+function resolveClick(e: MouseEvent) {
     const rect = canvas.getBoundingClientRect();
     const csx = (e.clientX - rect.left) * (canvas.width / rect.width);
     const csy = (e.clientY - rect.top) * (canvas.height / rect.height);
@@ -1733,9 +1789,13 @@ const ACTIONS: Record<string, (arg: string, el: HTMLElement) => void> = {
     closeRidePanel,
     renameRandom,
     demolishInspected,
-    hireStaff:          (arg) => hireStaff(arg),
-    fireStaff:          (arg) => fireStaff(arg),
-    startCampaign:      (arg) => startCampaign(arg),
+
+    // `arg` comes from a data-arg attribute, so it is always a string. The
+    // casts are the one honest place to narrow it -- the DOM cannot carry the
+    // union, and every alternative pushes `any` further into the sim.
+    hireStaff:          (arg) => hireStaff(arg as StaffKindId),
+    fireStaff:          (arg) => fireStaff(arg as StaffKindId),
+    startCampaign:      (arg) => startCampaign(arg as MarketingCampaignId),
     borrow:             (arg) => borrow(Number(arg)),
     repay:              (arg) => repay(Number(arg)),
     setAdmission:       (_a, el) => setAdmission((el as HTMLInputElement).value),

@@ -176,3 +176,58 @@ test('rideQueues are reconciled against the map on load', async ({ page }) => {
   const s = await state(page);
   expect(Object.keys(s.rideQueues)).toEqual([]);
 });
+
+/**
+ * ARCHITECTURE.md §3.6, the half that stayed open until now: `anchorOf` was a
+ * persisted copy of what `map` already says. It is now derived on load.
+ *
+ * The adjacent-blocks case is the one that makes this non-trivial: two 2×2
+ * rides side by side cover a solid 4×2 rectangle of identical tiles, and no
+ * single tile can tell you which ride it belongs to. Only the row-major scan
+ * order resolves it.
+ */
+test('anchorOf is not persisted, and is rebuilt from the map', async ({ page }) => {
+  await page.goto('/');
+  await page.waitForFunction(() => !!(window as any).__GAME__);
+
+  // Two 2x2 haunted houses flush against each other: one 4x2 solid rectangle.
+  await page.evaluate(() => {
+    const S = (window as any).__GAME__.state;
+    S.funds = 9_999_999;
+    for (const ax of [4, 6]) {
+      for (let dx = 0; dx < 2; dx++) {
+        for (let dy = 0; dy < 2; dy++) S.map[ax + dx][4 + dy] = 'haunted';
+      }
+    }
+    (window as any).__GAME__.saveGame();
+  });
+
+  const blob = await page.evaluate(() => localStorage.getItem('c2c_park_v4')!);
+  expect(blob).not.toContain('anchorOf');
+
+  await page.reload();
+  await page.waitForFunction(() => !!(window as any).__GAME__);
+
+  const anchors = await page.evaluate(() => {
+    const S = (window as any).__GAME__.state;
+    const at = (x: number, y: number) => {
+      const a = S.anchorOf[`${x},${y}`];
+      return a ? `${a.ax},${a.ay}` : 'none';
+    };
+    return {
+      a00: at(4, 4), a10: at(5, 4), a01: at(4, 5), a11: at(5, 5),
+      b00: at(6, 4), b10: at(7, 4), b01: at(6, 5), b11: at(7, 5),
+    };
+  });
+
+  // Every tile of the left house points at (4,4); every tile of the right at
+  // (6,4). A naive "scan left for the same type" would collapse them into one.
+  expect(anchors.a00).toBe('4,4');
+  expect(anchors.a10).toBe('4,4');
+  expect(anchors.a01).toBe('4,4');
+  expect(anchors.a11).toBe('4,4');
+  expect(anchors.b00).toBe('6,4');
+  expect(anchors.b10).toBe('6,4');
+  expect(anchors.b01).toBe('6,4');
+  expect(anchors.b11).toBe('6,4');
+});

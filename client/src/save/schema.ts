@@ -13,6 +13,7 @@
 import { SAVE_VERSION, type GameState } from '../core/state';
 import { parkRating, parkValue } from '../sim/park';
 import { migrate } from './migrations';
+import { rebuildAnchors } from '../sim/anchors';
 
 /**
  * Unchanged from the monolith on purpose. The key is where existing players'
@@ -55,14 +56,25 @@ export function summarize(state: GameState): SaveSummary {
  */
 export function serialize(state: GameState): GameState {
   state.version = SAVE_VERSION;
-  return JSON.parse(JSON.stringify(state)) as GameState;
+  const out = JSON.parse(JSON.stringify(state)) as GameState;
+  // anchorOf is derived from `map` (sim/anchors.ts) -- persisting it stores a
+  // second copy of the same fact that can drift out of step, and on a full
+  // park it is one of the larger things in the blob. Dropped on the way out
+  // and rebuilt on the way in.
+  delete (out as Partial<GameState>).anchorOf;
+  return out;
 }
 
 /** Parse + migrate. Returns null only when the input is not recoverably a park. */
 export function deserialize(json: string | null): GameState | null {
   if (!json) return null;
   try {
-    return migrate(JSON.parse(json));
+    const state = migrate(JSON.parse(json));
+    // Rebuilt unconditionally, so saves written before anchorOf was dropped
+    // are corrected rather than trusted -- if the stored copy had drifted from
+    // the map, this is where it stops mattering. No migration step needed.
+    rebuildAnchors(state);
+    return state;
   } catch {
     return null; // corrupt JSON -- treat as no save rather than throwing on boot
   }

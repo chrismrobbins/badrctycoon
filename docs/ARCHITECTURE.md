@@ -151,7 +151,7 @@ trusting them — they had already drifted in any park where something was demol
 
 This is what upgraded API-CONTRACT checks 7 and 10 from "upper bound" to exact equality.
 
-### 3.6 Save bloat and leaks
+### 3.6 Save bloat and leaks — FIXED
 
 - `anchorOf` is persisted with one entry per occupied tile — for a full 35×35 park that is
   ~1,200 `{"ax":n,"ay":n}` objects, tens of KB, all of it derivable from `map` + footprints.
@@ -437,7 +437,7 @@ Each phase ships independently and is revertable. No big-bang rewrite.
 | **3** ✅ | Content registry (§4.1). Nine tables + two dispatch chains + the palette markup collapsed. | Adding a ride = 1 file + 1 sprite |
 | **4** ✅ | Full split: `sim/` (finance, park, litter, staff, guests, rides, economy, objectives, awards, scenery, time), `ui/` (eventlog, statusbar, objectives, management, inspectors, palette, auth), `render/` (camera, iso, clock, sprites/<id>.ts for every attraction, effects, entities, fireworks, minimap). `main.ts`: 4,718 → ~1,560 lines. The `no-restricted-imports`/`no-restricted-globals` boundary rule on `sim/` shipped as `scripts/check-sim-boundary.mjs` instead of real ESLint -- typescript-eslint hard-refuses to run on TypeScript 7 (tracked at their issue #10940); see that script's header for the full story. `render()`, `handleInteraction`, and `buildInCell` stay in `main.ts` deliberately -- they're the composition root wiring the extracted pieces together, per §4.2's own target layout, not code still tangled. | Adding a ride is one file plus one sprite; `sim/` imports clean in Node with no DOM |
 | **5** ✅ | Fixed-timestep loop. Fixes §2.3, §2.5, §3.2. Seeded RNG deliberately deferred. | Frame-rate independence, pause works |
-| **6** ◐ | Migration chain that never rejects landed early, with phase 2. §3.6: the litter leak (bulldozing never deleted a path's `litter` entry) is fixed. Redundant `anchorOf` persistence is still open -- deliberately deferred past phase 4 despite being derivable from `map` + content, because removing it from `GameState` (matching the `rating`/`builtValue` precedent in §3.5) means updating ~15+ read sites across `sim/staff.ts`, `sim/rides.ts`, `sim/guests.ts`, and `main.ts`, not just the save boundary. | Saves survive version bumps |
+| **6** ✅ | Migration chain that never rejects landed early, with phase 2. §3.6 fully closed: the litter leak (bulldozing never deleted a path's `litter` entry) is fixed, and redundant `anchorOf` persistence is gone -- derived by `sim/anchors.ts`, stripped at save, rebuilt on load. | Saves survive version bumps, and carry nothing derivable |
 | **7** | Postgres + API. Auth, slots, sync, conflict UI. See [API-CONTRACT.md](API-CONTRACT.md). | Cloud saves |
 | **8** | Leaderboards, achievements, multi-park slot picker. | Platform |
 
@@ -551,12 +551,15 @@ Deferred with reasons rather than forgotten:
   `sim/staff.ts`, `sim/guests.ts`, and `sim/economy.ts` -- each says so in a comment. This is
   also why `check-sim-boundary.mjs` doesn't flag `Math.random()` yet, unlike the ESLint rule
   §4.2 originally called for; add that once seeded RNG lands.
-- **Redundant `anchorOf`** (§3.6, the other half). Still open, staying in phase 6 on purpose:
-  it's derivable from `map` + content (verified: footprints only ever extend down-right from
-  their anchor, so a deterministic scan reconstructs it exactly), but removing it from
-  `GameState` the way `rating`/`builtValue` were fixed means updating ~15+ read sites across
-  `sim/staff.ts`, `sim/rides.ts`, `sim/guests.ts`, and `main.ts` -- a real redesign, not a
-  bug fix.
+- **Redundant `anchorOf`** (§3.6, the other half) -- **DONE.** `sim/anchors.ts` derives it from
+  `map` with a row-major scan, `serialize()` drops it, and `deserialize()` rebuilds it, so old
+  saves are corrected rather than trusted. The read sites were left alone: rather than thread a
+  function through ~14 call sites (two of which are per-tile-per-frame in `render()`), the field
+  survives as a **cache with exactly one writer** -- `rebuildAnchors()`, called on load and after
+  every map mutation. Patching individual entries is what allowed the drift, so nothing else may
+  assign to it. The subtlety worth keeping: two 2x2 rides flush against each other form one solid
+  4x2 rectangle of identical tiles, and only the row-major scan order resolves which tile belongs
+  to which ride -- covered by a test.
 
 
 ---
