@@ -62,6 +62,27 @@ ledger rules.
 - `legacy/park-builder.html` — **not committed yet.** Drop the original file here; it stays as
   the frozen reference to diff against during the port
 
+## Graphics
+
+Sprites are hand-written canvas paths (`client/src/render/sprites/`). The **carousel** is the
+first one baked in Blender instead, as a pilot for a pre-rendered pipeline — the same trick
+RollerCoaster Tycoon used, and it fits because the game's 2:1 dimetric projection is one an
+orthographic camera reproduces exactly.
+
+```bash
+blender --background --python scripts/blender/carousel.py   # -> 16 frames
+node scripts/blender/pack-strip.mjs carousel                # -> client/public/sprites/carousel.png
+```
+
+The camera at rot X 60° / Z 45° gives a ground squash of `sin 30° = 0.5`, so a 1×1 Blender unit
+lands exactly on the 64×32 tile — verified by rendering a bare tile and measuring it. Strips are
+packed at 2× because zoom clamps to 1.8; they animate off `simClock`, so they pause when the game
+does. **Every strip keeps its original vector function as a fallback** ([render/atlas.ts](client/src/render/atlas.ts)),
+so a slow load or a 404 degrades to the art that shipped before rather than a hole in the park.
+
+The `.py` is the source of truth — the PNG is a build artifact, don't hand-edit it. `tests/sprites.spec.ts`
+fails if a re-render leaves the strip's dimensions disagreeing with its `loadStrip()` spec.
+
 ## Where this is going
 
 ```

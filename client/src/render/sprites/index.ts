@@ -4,6 +4,32 @@ import { drawFlowerBed, drawTrashCan, drawBench, drawLamp, drawTree, drawFountai
 import { drawBalloonStand, drawRestroom, drawDrinkStall, drawFoodStall, drawGoKarts } from './shops';
 import { drawCarousel, drawTeaCups, drawBumperCars, drawDropTower, drawSwingingShip, drawHauntedHouse, drawFerrisWheel, drawCoaster } from './rides';
 import { drawMegaCoaster } from './megacoaster';
+import { loadStrip } from '../atlas';
+
+// ── Pre-rendered strips ──
+// Baked in Blender rather than drawn with ctx paths. See render/atlas.ts for
+// how the strip is laid out and why each field is what it is; the geometry
+// itself lives in scripts/blender/carousel.py.
+//
+// The numbers here are not free parameters -- they're the output of
+// `node scripts/blender/pack-strip.mjs carousel`, and the Blender camera is
+// calibrated so a 1x1 tile lands exactly on the game's 64x32 diamond. Change
+// them only alongside a re-render.
+//
+// msPerLoop matches the vector drawCarousel it replaces: that used
+// `angle = simClock * 0.001`, so one revolution is 2*PI*1000 sim-ms. Keeping
+// it identical means the swap doesn't change how fast the park reads.
+const carouselStrip = loadStrip({
+  src: '/sprites/carousel.png',
+  frames: 16,
+  w: 96,
+  h: 128,
+  anchorX: 48,
+  anchorY: 64,
+  packScale: 2,
+  msPerLoop: 2 * Math.PI * 1000,
+  fallback: drawCarousel,
+});
 
 // id -> how to draw it. Replaces the two `else if (cell === '...')` chains the
 // renderer used to carry (one for 1x1, one for multi-tile), which meant adding a
@@ -30,7 +56,7 @@ export const SPRITES: Record<string, SpriteFn> = {
   drinkstall: drawDrinkStall,
   foodstall: drawFoodStall,
 
-  carousel: drawCarousel,
+  carousel: (ctx, cx, cy) => carouselStrip.draw(ctx, cx, cy),
   teacups: drawTeaCups,
   bumper: drawBumperCars,
   droptower: drawDropTower,

@@ -9,6 +9,9 @@ dist/
 Thumbs.db
 test-results/
 playwright-report/
+# Intermediate Blender frames. The committed artifacts are the .py source and
+# the packed strip under client/public/sprites/ -- not these.
+scripts/blender/out/
 blob-report/
 .playwright/
 .wrangler/
