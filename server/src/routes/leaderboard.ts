@@ -9,8 +9,8 @@
  * one (contract §3).
  */
 
-import type { FastifyInstance } from 'fastify';
-import { pool } from '../db';
+import { Hono } from 'hono';
+import type { AppEnv } from '../types';
 import { apiError } from '../errors';
 
 const METRICS = new Set(['park_value', 'guests_peak', 'day_reached']);
@@ -23,35 +23,31 @@ interface LeaderboardRow {
   value: number;
 }
 
-export async function leaderboardRoutes(app: FastifyInstance): Promise<void> {
-  app.get<{ Querystring: { metric?: string; limit?: string } }>(
-    '/api/leaderboard',
-    async (request) => {
-      const metric = request.query.metric ?? 'park_value';
-      if (!METRICS.has(metric)) {
-        throw apiError(400, 'invalid_metric', `metric must be one of ${[...METRICS].join(', ')}.`);
-      }
+export const leaderboardRoutes = new Hono<AppEnv>();
 
-      const rawLimit = Number(request.query.limit ?? DEFAULT_LIMIT);
-      const limit =
-        Number.isInteger(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, MAX_LIMIT) : DEFAULT_LIMIT;
+leaderboardRoutes.get('/api/leaderboard', async (c) => {
+  const metric = c.req.query('metric') ?? 'park_value';
+  if (!METRICS.has(metric)) {
+    throw apiError(400, 'invalid_metric', `metric must be one of ${[...METRICS].join(', ')}.`);
+  }
 
-      const { rows } = await pool.query<{ display_name: string; value: string | number }>(
-        `SELECT u.display_name, s.value
-           FROM scores s
-           JOIN users u ON u.id = s.user_id
-          WHERE s.metric = $1
-          ORDER BY s.value DESC
-          LIMIT $2`,
-        [metric, limit],
-      );
+  const rawLimit = Number(c.req.query('limit') ?? DEFAULT_LIMIT);
+  const limit = Number.isInteger(rawLimit) && rawLimit > 0 ? Math.min(rawLimit, MAX_LIMIT) : DEFAULT_LIMIT;
 
-      const leaderboardRows: LeaderboardRow[] = rows.map((row, i) => ({
-        rank: i + 1,
-        displayName: row.display_name,
-        value: Number(row.value),
-      }));
-      return { rows: leaderboardRows };
-    },
+  const { rows } = await c.get('db').query<{ display_name: string; value: string | number }>(
+    `SELECT u.display_name, s.value
+       FROM scores s
+       JOIN users u ON u.id = s.user_id
+      WHERE s.metric = $1
+      ORDER BY s.value DESC
+      LIMIT $2`,
+    [metric, limit],
   );
-}
+
+  const leaderboardRows: LeaderboardRow[] = rows.map((row, i) => ({
+    rank: i + 1,
+    displayName: row.display_name,
+    value: Number(row.value),
+  }));
+  return c.json({ rows: leaderboardRows });
+});

@@ -1,7 +1,9 @@
 # API Contract — backend handoff
 
-For whoever builds `server/`. The client side of phases 0–5 is done and committed;
-this is what it expects from the API, and what the API must not take on trust.
+Written for whoever built `server/`; now the reference for whoever touches it
+next, since `server/` is built and live. The client side of phases 0–5 is
+done and committed; this is what it expects from the API, and what the API
+must not take on trust.
 
 New to this? Read [BACKEND-HANDOFF.md](BACKEND-HANDOFF.md) first — it covers getting
 the repo running, build order, and the traps. [ARCHITECTURE.md](ARCHITECTURE.md)
@@ -13,23 +15,27 @@ This document is the interface, and it wins over both of those if they disagree.
 
 ## 1. What already exists
 
+Everything below is done and live on `badrctycoon.com`, not just written --
+this table used to describe a plan; it now describes what shipped.
+
 | Thing | Where | State |
 |---|---|---|
-| Postgres schema | [`server/migrations/001_init.sql`](../server/migrations/001_init.sql) | Written, **not run against a live database yet** |
+| Postgres schema | [`server/migrations/001_init.sql`](../server/migrations/001_init.sql) | Done, applied to production (Supabase) |
 | Save format | `client/src/core/state.ts` → `GameState` | Done, versioned, migrating |
 | Migration chain | `client/src/save/migrations.ts` | Done |
 | Ledger invariant | `client/src/sim/finance.ts` | Done |
 | Content registry | `client/src/content/` | Done |
-| HTTP client | `client/src/net/client.ts` | Written to this contract; never run against a real server |
-| Sync engine | `client/src/save/sync.ts` | Written and tested against a fake server (`tests/sync.spec.ts`) |
-| Auth UI | — | **Not built.** Nothing drives the engine yet |
-
-The schema has never been executed. Expect to fix something on first `psql -f`.
+| HTTP client | `client/src/net/client.ts` | Done, live against the real server |
+| Sync engine | `client/src/save/sync.ts` | Done, live -- conflict handling verified with two real browser contexts (`tests/ui-auth.spec.ts`) |
+| Auth UI | `client/src/ui/auth.ts` | Done, live |
+| Server | `server/` (Hono on Cloudflare Workers) | Done, live -- see `docs/BACKEND-HANDOFF.md` for the runtime and its traps |
 
 ## 2. Modules the server can import
 
-These are pure, DOM-free, and Node-importable. `tests/portability.spec.ts` runs in
-Node with no DOM and fails if anyone breaks that, so it is safe to depend on:
+These are pure, DOM-free, and Node-importable -- and, as of the Workers
+migration, actually imported at the edge in production, which is the harder
+claim. `tests/portability.spec.ts` runs in Node with no DOM and fails if
+anyone breaks that, so it is safe to depend on:
 
 ```ts
 client/src/core/state.ts        // GameState, SAVE_VERSION, STARTING_FUNDS, emptyLedger
@@ -63,7 +69,12 @@ GET    /api/auth/me                                                       -> 200
 `user` is `{ id, username, displayName, isAdmin }`. Never return `password_hash`.
 
 - **Argon2id**, not PBKDF2. The arcade used PBKDF2 only because Workers crypto
-  offered nothing better; on Node there is no reason to.
+  offered nothing better. This server is now Workers too (§9), and that
+  reasoning almost bit twice: `@node-rs/argon2` (a native binary) cannot load
+  in a Workers isolate, and the first WASM fallback tried couldn't either --
+  see `server/src/auth/password.ts`'s header for why. `argon2-wasm-edge`
+  (static `.wasm` import, compiled at deploy time rather than at runtime) is
+  what actually works, so Argon2id held after all.
 - Store `sha256(token)` in `sessions.token_hash`, never the token. A database
   leak must not be a session leak.
 - Rate-limit register and login per IP **and** per username.
@@ -233,14 +244,19 @@ Stable machine-readable `code`; `message` is for humans and may change. Use
 `409` revision conflict, `413` too large, `422` failed a game invariant,
 `429` rate limited.
 
-## 8. What the client already does, and what is missing
+## 8. What the client does
 
-`net/client.ts` and `save/sync.ts` are written **to this document**, which is the
-main reason to trust it is implementable — but they have only ever talked to the
-fake server in `tests/sync.spec.ts`. Treat the first real integration as a review
-of both sides, and expect to find at least one place where the doc was ambiguous.
+`net/client.ts` and `save/sync.ts` were written **to this document** before the
+server existed, which was the main reason to trust it was implementable. They
+were only ever tested against the fake server in `tests/sync.spec.ts` until
+`tests/server-integration.spec.ts` pointed the real modules at a real,
+running server -- that pass is exactly where the ambiguity in checks 7/10
+(§6) turned up, and where `createGameState()` alone turning out not to be
+what a real client saves (the map starts as `[]`) turned up too. Both are
+fixed; the point of writing this down is that the same pattern -- run the
+real thing, not just the fake one -- is what found them.
 
-Behaviour the sync engine already implements, and that the server should expect:
+Behaviour the sync engine implements, and that the server relies on:
 
 - Local storage is written **before** any network call. A failed push never costs
   progress; the park just stays `dirty`.
@@ -254,16 +270,22 @@ Behaviour the sync engine already implements, and that the server should expect:
 - A 401 drops to local-only rather than surfacing an error, so an expired cookie
   does not interrupt play.
 
-Still missing: **`client/src/ui/auth.ts`** — the login/register form, the slot
-picker, and the dialog that presents a conflict. Nothing drives the engine
-without it. The game stays fully playable logged out either way; accounts add
-cloud saves, they are not a gate.
+**`client/src/ui/auth.ts`** — the login/register form, the slot picker, and
+the conflict dialog -- is built and live. The game stays fully playable
+logged out either way; accounts add cloud saves, they are not a gate.
 
 ## 9. Decisions still open
 
-- **Hosting.** Azure Database for PostgreSQL Flexible Server + Container Apps is
-  the org-aligned answer; Neon + Fly is the cheap one. Either way the API is
-  ordinary Node, so it is reversible.
+- ~~**Hosting.**~~ **Decided and live:** Cloudflare Workers (compute) + Static
+  Assets (the built client) + Hyperdrive (Postgres connection pooling) + KV +
+  the built-in Rate Limiting binding, all free at this scale, in front of a
+  free-tier Supabase Postgres database (Hyperdrive doesn't host Postgres
+  itself). One Worker serves both the client and `/api/*` from one origin.
+  Chosen over the Azure/Neon+Fly options this section used to list because it
+  was free and Chris already had accounts for both halves. This was not "the
+  API is ordinary Node" as originally assumed here -- see §3's Argon2id note
+  and `docs/BACKEND-HANDOFF.md`'s trap section for what that actually meant
+  in practice.
 - **Slot count.** Schema currently caps at 12 (`save_slots_slot_range`).
 - **Guest persistence.** Guests are in the blob from v6 and are most of its size.
   If blobs get uncomfortable, dropping them is a migration, not a redesign.

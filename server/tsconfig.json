@@ -3,7 +3,7 @@
   // (docs/BACKEND-HANDOFF.md §8) -- strict from the start, unlike the root config.
   "extends": "../tsconfig.json",
   "compilerOptions": {
-    "types": ["node"],
+    "types": ["node", "@cloudflare/workers-types"],
     "strict": true,
     "noImplicitAny": true,
     "strictNullChecks": true,
