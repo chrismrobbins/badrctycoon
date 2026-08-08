@@ -1,0 +1,18 @@
+{
+  // server/ is new code with no "the monolith had to compile on day one" excuse
+  // (docs/BACKEND-HANDOFF.md §8) -- strict from the start, unlike the root config.
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "types": ["node"],
+    "strict": true,
+    "noImplicitAny": true,
+    "strictNullChecks": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true
+  },
+  // Deliberately not "../client/src": imports pull in exactly the shared modules
+  // in use (core/state, content/, sim/, save/migrations) without pulling the rest
+  // of the client tree -- main.ts et al -- into a strict compile they were never
+  // written for.
+  "include": ["src"]
+}

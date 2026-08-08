@@ -1,9 +1,12 @@
 import './styles/app.css';
-import { createGameState, emptyLedger, type RideQueue } from './core/state';
+import { createGameState, emptyLedger, type RideQueue, type GameState } from './core/state';
 import { SAVE_KEY, loadFromLocalStorage, saveToLocalStorage } from './save/schema';
 import * as Fin from './sim/finance';
 import { builtValue, parkRating, parkValue } from './sim/park';
 import { AWARDS } from './content/awards';
+import { createApi } from './net/client';
+import { mountAuthUI } from './ui/auth';
+import { getPlaytimeMs, startPlaytimeTracking, ensureAtLeast as ensurePlaytimeAtLeast } from './save/playtime';
 // One source of truth for every buildable thing. These were nine hand-synced
 // tables in the monolith; they are all derived from content/ now.
 import {
@@ -4552,6 +4555,10 @@ const ACTIONS: Record<string, (arg: string, el: HTMLElement) => void> = {
     setSpeed:           (arg) => setSpeed(Number(arg)),
     openMgmt:           (arg) => openMgmt(arg),
     closeMgmt,
+    // No closeAccount entry: the panel closes itself (its own × button and
+    // backdrop, bound in ui/auth.ts via data-close) rather than round-
+    // tripping through the global dispatch table it otherwise stays out of.
+    openAccount:        () => authUI.open(),
     newGame,
     buyLand,
     undoLast,
@@ -4625,6 +4632,40 @@ if (restored) {
     logEvent('Tip: press M for management, 1-9 for tools, B to bulldoze, Ctrl+Z to undo.', 'info');
 }
 updateUI();
+
+// ────── Accounts & cloud saves (phase 7-8) ──────
+// Local-first, and additive: nothing below can stop someone playing with no
+// account at all (ARCHITECTURE §5-6, BACKEND-HANDOFF.md §1). ui/auth.ts owns
+// the sync engine and every account/slot/conflict UI; main.ts only supplies
+// the four callbacks below and two buttons' worth of open()/close().
+startPlaytimeTracking();
+
+/** Replace the live park with one loaded from the server (a slot switch, or
+ *  a conflict resolved via "use theirs"). Rehydration happens separately in
+ *  onExternalStateChange -- see mountAuthUI's ordering. */
+function applyExternalState(newState: GameState) {
+    Object.assign(S, newState);
+}
+
+/** Everything boot does after loading a save, replayed for a save that
+ *  arrived after boot instead of at it. */
+function refreshAfterExternalStateChange() {
+    hydrateEntities();
+    recomputeCleanliness();
+    renderObjectives();
+    updateLandButton();
+    refreshPalette();
+    updateUI();
+}
+
+const authUI = mountAuthUI(document.getElementById('account'), {
+    api: createApi(),
+    getState: () => S,
+    applyState: applyExternalState,
+    getPlaytimeMs,
+    onExternalStateChange: refreshAfterExternalStateChange,
+    ensurePlaytimeAtLeast,
+});
 
 // ────── The loop ──────
 
