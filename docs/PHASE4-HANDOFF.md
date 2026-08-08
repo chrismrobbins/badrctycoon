@@ -120,23 +120,31 @@ everything else can just ignore the extra argument `render()` always passes.
 If you add a sprite that needs more context than `(ctx, cx, cy)`, follow this
 shape rather than inventing a new one.
 
-**The minimap's "starts on but looks off" bug (ARCHITECTURE.md §3.7) is still
-there, confirmed reproducible, not something this phase touched.**
+**The minimap's "starts on but looks off" bug (ARCHITECTURE.md §3.7) — FIXED
+since this was written**, and the description below is kept because it explains
+what was wrong. `minimapOn` now initialises `false` to match the markup.
 `minimapOn` initializes `true` but `#minimap-wrap` ships with the `hidden`
 class already on it in the HTML, so it takes two toggles to actually show.
 Don't "fix" this by accident while touching `render/minimap.ts` without
-meaning to — it's cheap to fix (clear the class at boot, or initialize
-`minimapOn` to match) but wasn't in scope here.
+meaning to. It was fixed the second way (`minimapOn` initialised to match the
+markup). Note that `tests/smoke.spec.ts` had been *asserting the bug* — click
+once expects hidden, click twice expects visible — so a green suite was holding
+it in place; that test was corrected at the same time.
 
-**A loose end from earlier in this session, unrelated to phase 4:** a Blender
-MCP server (`uvx blender-mcp`) was registered for this project
-(`claude mcp add blender -- uvx blender-mcp`, confirmed connected via `claude
-mcp list`). It was for a 3D-asset pipeline question that never got resumed —
-the game is a 2D isometric canvas renderer, so it's not clear yet what it's
-actually for. A **new Claude Code session needs to start** before the Blender
-tools are visible (this one was already running when the server was
-registered). If you're picking this thread back up, that's context, not a
-task — ask Chris what it was for before doing anything with it.
+**RESOLVED — the Blender loose end became the art pipeline.** This section used
+to say a Blender MCP server had been registered (`claude mcp add blender --
+uvx blender-mcp`) for "a 3D-asset pipeline question that never got resumed",
+that it wasn't clear what it was for, and to ask Chris before touching it.
+That question got answered: **every sprite in the game is now pre-rendered in
+Blender**, which works because the game's 2:1 dimetric projection is one an
+orthographic camera reproduces exactly. See
+[ARCHITECTURE.md §9](ARCHITECTURE.md#9-rendering--the-baked-sprite-pipeline)
+for the design and the README's Graphics section for how to run it. Nothing
+here is a live question any more.
+
+(Still true and worth keeping: a **new Claude Code session must start** before
+the Blender MCP tools become visible, if the server was registered while a
+session was already running.)
 
 ## 6. Decisions already made
 

@@ -72,7 +72,8 @@ under `nodejs_compat` -- the server reuses them rather than restating the cost t
 ledger rules.
 
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — evaluation of the monolith, target module
-  layout, trust model, and the phased migration plan
+  layout, trust model, the phased migration plan, and **§9: the baked sprite pipeline** (why the
+  projection works, what is baked vs overlaid, how rotation is done, and the guards)
 - [`server/migrations/001_init.sql`](server/migrations/001_init.sql) — Postgres schema for
   users, sessions, save slots, leaderboards
 - `legacy/park-builder.html` — **not committed yet.** Drop the original file here; it stays as

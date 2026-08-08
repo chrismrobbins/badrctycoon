@@ -158,7 +158,7 @@ This is what upgraded API-CONTRACT checks 7 and 10 from "upper bound" to exact e
 - `litter["x,y"]` entries are never deleted when the underlying path is bulldozed. They stop
   affecting cleanliness (which only counts path tiles) but persist in the save forever.
 
-### 3.7 Minimap boots in a state that contradicts its own button
+### 3.7 Minimap boots in a state that contradicts its own button — FIXED
 
 `minimapOn` initialises to `true` and startup runs
 `document.getElementById('btn-minimap').classList.add('text-blue-500')`, so the button renders
@@ -169,6 +169,11 @@ button lies about its state until then.
 
 The general shape — UI state duplicated between a JS variable and a class on an element, with
 no single owner — is what phase 2's state object and phase 4's UI modules exist to remove.
+
+**Fixed:** `minimapOn` now initialises `false`, matching the markup, so one click opens it.
+Worth recording *why* it survived four phases: `tests/smoke.spec.ts` was **asserting the bug** —
+click once expects hidden, click twice expects visible. A passing suite was holding the defect
+in place. A green test only proves behaviour is unchanged, not that it is correct.
 
 ### 3.8 Latent XSS on ride names
 
@@ -436,6 +441,12 @@ Each phase ships independently and is revertable. No big-bang rewrite.
 | **7** | Postgres + API. Auth, slots, sync, conflict UI. See [API-CONTRACT.md](API-CONTRACT.md). | Cloud saves |
 | **8** | Leaderboards, achievements, multi-park slot picker. | Platform |
 
+**The art pipeline (§9) is not a phase.** It was not in this plan and was never scoped as
+migration work — it happened after phases 0–5 and 7–8 were done, and it is additive: it replaced
+how sprites are *drawn* without touching `sim/`, the save format, or the content registry. It is
+documented in §9 rather than bolted onto the table above, because the table is the story of
+taking the monolith apart and this is a different story.
+
 Phases 2 and 3 are where the "modular and scalable" ask is actually paid off. Phase 6 must
 land before phase 7 — putting a lossy, version-fragile save format behind a network boundary
 turns §3.1 from a local annoyance into support tickets.
@@ -546,3 +557,126 @@ Deferred with reasons rather than forgotten:
   `GameState` the way `rating`/`builtValue` were fixed means updating ~15+ read sites across
   `sim/staff.ts`, `sim/rides.ts`, `sim/guests.ts`, and `main.ts` -- a real redesign, not a
   bug fix.
+
+
+---
+
+## 9. Rendering — the baked sprite pipeline
+
+Everything in the park — 20 attractions, the entrance, guests and staff — is a **pre-rendered
+3D model**, not canvas path drawing. This section is the design; the README's Graphics section
+is the operating manual.
+
+### 9.1 Why this is possible at all
+
+The game is **2:1 dimetric**: `TILE_W 64 × TILE_H 32` (`render/camera.ts`). An orthographic
+camera at rotation X 60° / Z 45° squashes the ground plane by `sin 30° = 0.5` — exactly 2:1. So
+a 1×1 Blender unit lands precisely on one map tile with no fudge factor, and models can be
+authored in tile units.
+
+That was **verified, not assumed**: rendering a bare 1×1 plane and measuring the PNG gives
+63.5 × 32 px centred on the frame centre (the half-pixel is antialiased-edge thresholding). Every
+later decision rests on that number, which is why it was measured before a single model existed.
+
+Two things silently break the calibration if touched:
+
+- **`sensor_fit` must be `HORIZONTAL`.** Under the default `AUTO`, Blender maps `ortho_scale` to
+  the *larger* frame dimension, so making a frame taller (which towers and canopies need)
+  rescales the tile with no error.
+- **`ortho_scale` is derived, never chosen.** 64 px is a tile's diagonal, `√2` units, so
+  `ortho_scale = (sprite_w / 64) × √2`.
+
+### 9.2 Where things live
+
+| Path | Role |
+|---|---|
+| `scripts/blender/kit.py` | Camera, lighting, primitives, render driver. The part that must be identical everywhere, because it is what makes every sprite agree on where the ground is |
+| `scripts/blender/attractions.py` | **Source of truth.** Every model, and the MANIFEST of frame sizes / angles / variants |
+| `scripts/blender/blend/*.blend` | Inspectable models, regenerated from the `.py`. Open them to judge a model; edit the script, not the file |
+| `scripts/blender/pack-strip.mjs` | Resizes, arranges, quantises, and emits the TS spec table |
+| `client/public/sprites/*.png` | Build artifacts |
+| `client/src/render/atlas.ts` | `loadStrip` (tile-bound sprites) and `loadSheet` (people, addressed by explicit cell) |
+| `client/src/render/sprites/generated-strips.ts` | Generated. Never hand-edit |
+
+### 9.3 What is baked, and what deliberately is not
+
+Baked: geometry, palette, day lighting, and motion that is a pure function of time.
+
+Not baked, and still canvas drawn *on top of* the blit:
+
+- **Night lights.** `main.ts` already tints the whole scene after the grid pass, so baked sprites
+  darken on their own — but lit windows and chasing bulbs are *emissive* and must be added, not
+  dimmed. These live in `drawXNight()` functions which the vector originals still call, so the
+  fallback path is unchanged.
+- **Anything reading `GameState`** — the trash can's litter-overflow indicator.
+- **Per-entity state** — a guest's balloon and happiness marker.
+
+The rule: if it is structure, bake it; if it is a light or depends on state, overlay it.
+
+### 9.4 Rotation needs two numbers
+
+`rotationAngle` is **continuous** — the map plane, from which ground, positions and depth are
+computed, so the park sweeps smoothly. `rotation` is **0–3** — which baked sprite to use.
+
+A structure is a bitmap that exists at exactly four angles with *no in-between image*, so it
+takes the nearest and swaps at the 45° midpoint, where the motion of everything else hides the
+change. Smooth where the geometry allows, quantised where the art forces it.
+
+**Continuous rotation in the Google-Maps sense would mean rendering the actual 3D models in the
+browser** — a different renderer, not a bigger sheet. Baking more angles only moves the pop
+around: 8 angles doubles the art to halve an artifact that already lands mid-sweep.
+
+Consequences worth knowing before touching the renderer:
+
+- **Depth is `rx + ry` in *rotated* space.** Using raw `x + y` is the classic rotation bug: it
+  does not throw, everything still draws, but at rotations 1–3 structures behind you paint over
+  ones in front. `depthOf()` exists so no call site does that arithmetic itself. This was got
+  wrong twice — once for structures, once for guests and staff.
+- **Tiles are projected quads, not fixed diamonds.** A 64×32 diamond is the correct shape at
+  exactly four angles; a continuously rotated lattice is sheared, and fixed diamonds leave gaps
+  against their neighbours. `blockCorners()` reduces to precisely that diamond at angle 0.
+- **Only asymmetric sprites pay for angles.** `rot: 4` in the MANIFEST for anything with a front;
+  radially symmetric things (fountain, drop tower, tea cups, carousel) stay at 1.
+- **People need no extra renders.** Their four facings are already the four 90° steps, so a
+  figure facing `f` under camera rotation `r` is identical to one facing `f − r` unrotated.
+  Re-indexing the sheet is exactly equivalent to re-rendering it, and free.
+
+### 9.5 The guards, and why each exists
+
+- **Clipping is a hard error.** Frame boxes are set per attraction by hand, and getting one wrong
+  makes Blender render a coaster with its lift hill sliced off — no error, and genuinely hard to
+  spot at map scale. `pack-strip.mjs` refuses to pack a sheet whose artwork touches the frame
+  edge. It has caught several, including two — the coaster's lift hill and the drink stall's
+  corner-mounted cup sign — that only appeared once rotation changed which way a model's longest
+  axis points, on frames that were comfortably large at rotation 0.
+- **The spec table is generated.** Hand-copying frame counts into the wiring is how a re-render
+  starts blitting sliced-up garbage at exactly the right size. `tests/sprites.spec.ts` imports
+  the generated table and fails if any PNG's real dimensions disagree with it — the failure a
+  screenshot test sails straight past.
+- **Every strip keeps its vector function as a fallback.** A slow load or a 404 degrades to the
+  art that shipped before, never a hole in the park.
+- **`pack-strip.mjs` describes the whole set even when re-packing one sprite.** An earlier version
+  filtered the TS table by the subset being packed, so packing a single sprite rewrote it with
+  one entry and took the game down at boot.
+
+### 9.6 Cost
+
+~2.7 MB of sheets against a ~140 KB JS bundle. Sheets are packed to a **256-colour palette**:
+these are flat-shaded renders of a handful of materials, so quantising is near-lossless —
+measured mean error 1–2/255, indistinguishable side by side, for ~25% of the bytes. **128 colours
+is not safe**; it visibly dithers the large flat gradients on the ride pads.
+
+Rotation is what took the total from 0.87 MB to 2.7 MB: eleven attractions ship four angles each.
+The ferris wheel alone is 821 KB (12 frames × 4 angles); dropping it to 8 frames would save
+~270 KB. Because the palette did the compression work, no sprite had to give up animation frames.
+
+### 9.7 Known gaps
+
+- **The 45° sprite swap** (§9.4). Structural, not a bug: it is the ceiling of a sprite renderer.
+- **Sheets are decoded eagerly at module load.** Fine at 2.7 MB; worth revisiting if the set grows
+  much further, since nothing currently defers a sheet the player may never see.
+
+Things that look like gaps and are not: the park **fence** and the **entrance** both rotate
+correctly. The fence draws each rail between two *map* coordinates (`seg()` projects both
+endpoints), so it follows the projection for free; the entrance is baked at four angles like
+every other structure.
