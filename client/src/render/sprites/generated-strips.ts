@@ -10,8 +10,17 @@
 export interface GeneratedStrip {
   /** Animation frames, laid out left to right. */
   frames: number;
-  /** Deterministic variants, laid out top to bottom, picked by tileHash. */
+  /**
+   * Rows of the sheet, top to bottom. A row is `variant * rot + rotation`:
+   * deterministic tileHash variants, each rendered at `rot` camera angles.
+   */
   variants: number;
+  /**
+   * Camera angles baked for this sprite: 4 for anything with a front, 1 for
+   * radially symmetric things that look identical from every side (rendering
+   * those four times would quadruple their bytes for no visible difference).
+   */
+  rot: number;
   /** Logical size in world px. */
   w: number;
   h: number;
@@ -22,26 +31,26 @@ export interface GeneratedStrip {
 export const PACK_SCALE = 2;
 
 export const STRIPS: Record<string, GeneratedStrip> = {
-  balloonstand: { frames: 8, variants: 1, w: 96, h: 144, tiles: 1 },
-  bench: { frames: 1, variants: 2, w: 96, h: 96, tiles: 1 },
-  bumper: { frames: 16, variants: 1, w: 96, h: 112, tiles: 1 },
-  carousel: { frames: 16, variants: 1, w: 96, h: 128, tiles: 1 },
-  coaster: { frames: 12, variants: 1, w: 176, h: 176, tiles: 2 },
-  drinkstall: { frames: 8, variants: 1, w: 96, h: 128, tiles: 1 },
-  droptower: { frames: 16, variants: 1, w: 96, h: 208, tiles: 1 },
-  ferriswheel: { frames: 12, variants: 1, w: 176, h: 272, tiles: 2 },
-  flowerbed: { frames: 6, variants: 2, w: 96, h: 96, tiles: 1 },
-  foodstall: { frames: 8, variants: 1, w: 96, h: 128, tiles: 1 },
-  fountain: { frames: 8, variants: 1, w: 96, h: 112, tiles: 1 },
-  gokarts: { frames: 12, variants: 1, w: 176, h: 144, tiles: 2 },
-  guest: { frames: 6, variants: 28, w: 48, h: 64, tiles: 1 },
-  haunted: { frames: 1, variants: 1, w: 176, h: 176, tiles: 2 },
-  lamp: { frames: 1, variants: 1, w: 96, h: 128, tiles: 1 },
-  megacoaster: { frames: 12, variants: 1, w: 320, h: 352, tiles: 4 },
-  restroom: { frames: 1, variants: 1, w: 96, h: 112, tiles: 1 },
-  ship: { frames: 16, variants: 1, w: 176, h: 208, tiles: 2 },
-  staff: { frames: 6, variants: 24, w: 56, h: 72, tiles: 1 },
-  teacups: { frames: 16, variants: 1, w: 96, h: 112, tiles: 1 },
-  trashcan: { frames: 1, variants: 1, w: 96, h: 96, tiles: 1 },
-  tree: { frames: 8, variants: 3, w: 96, h: 128, tiles: 1 },
+  balloonstand: { frames: 8, variants: 4, rot: 4, w: 96, h: 144, tiles: 1 },
+  bench: { frames: 1, variants: 8, rot: 4, w: 96, h: 96, tiles: 1 },
+  bumper: { frames: 16, variants: 1, rot: 1, w: 96, h: 112, tiles: 1 },
+  carousel: { frames: 16, variants: 1, rot: 1, w: 96, h: 128, tiles: 1 },
+  coaster: { frames: 12, variants: 4, rot: 4, w: 176, h: 208, tiles: 2 },
+  drinkstall: { frames: 8, variants: 4, rot: 4, w: 128, h: 144, tiles: 1 },
+  droptower: { frames: 16, variants: 1, rot: 1, w: 96, h: 208, tiles: 1 },
+  ferriswheel: { frames: 12, variants: 4, rot: 4, w: 176, h: 272, tiles: 2 },
+  flowerbed: { frames: 6, variants: 2, rot: 1, w: 96, h: 96, tiles: 1 },
+  foodstall: { frames: 8, variants: 4, rot: 4, w: 96, h: 128, tiles: 1 },
+  fountain: { frames: 8, variants: 1, rot: 1, w: 96, h: 112, tiles: 1 },
+  gokarts: { frames: 12, variants: 4, rot: 4, w: 176, h: 144, tiles: 2 },
+  guest: { frames: 6, variants: 28, rot: 1, w: 48, h: 64, tiles: 1 },
+  haunted: { frames: 1, variants: 4, rot: 4, w: 176, h: 176, tiles: 2 },
+  lamp: { frames: 1, variants: 1, rot: 1, w: 96, h: 128, tiles: 1 },
+  megacoaster: { frames: 12, variants: 4, rot: 4, w: 320, h: 352, tiles: 4 },
+  restroom: { frames: 1, variants: 4, rot: 4, w: 96, h: 112, tiles: 1 },
+  ship: { frames: 16, variants: 4, rot: 4, w: 176, h: 208, tiles: 2 },
+  staff: { frames: 6, variants: 24, rot: 1, w: 56, h: 72, tiles: 1 },
+  teacups: { frames: 16, variants: 1, rot: 1, w: 96, h: 112, tiles: 1 },
+  trashcan: { frames: 1, variants: 1, rot: 1, w: 96, h: 96, tiles: 1 },
+  tree: { frames: 8, variants: 3, rot: 1, w: 96, h: 128, tiles: 1 },
 };

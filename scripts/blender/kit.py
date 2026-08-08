@@ -325,6 +325,35 @@ def blend_only(scene, spec, build_fn, blend_root):
     return paths
 
 
+def apply_view_rotation(r):
+    """Re-parent everything to a root empty turned -r*90deg about Z.
+
+    Rotating the MODEL by -r*90 is equivalent to orbiting the camera by
+    +r*90, and it keeps the key light fixed in SCREEN space -- which is what
+    we want: a sprite lit from the upper-left at every angle, exactly as
+    isometric games have always faked rotation. Orbiting the real camera
+    instead would swing the shadows around and make the park look like the
+    sun was spinning.
+
+    Derived, not guessed: kit projects world +X to screen down-right and -Y to
+    up-right, and the map rotation in render/camera.ts sends map +X from
+    down-right to up-right for r=1. Rotating the model by -90 maps +X onto -Y,
+    which is exactly that.
+    """
+    if r == 0:
+        return None
+    root = bpy.data.objects.new("ViewRot", None)
+    bpy.context.scene.collection.objects.link(root)
+    root.rotation_euler = (0, 0, -r * math.pi / 2)
+    for ob in list(bpy.data.objects):
+        if ob is root or ob.parent is not None:
+            continue
+        if ob.type in {'CAMERA', 'LIGHT'}:
+            continue
+        ob.parent = root
+    return root
+
+
 def render_all(scene, spec, build_fn, out_root, blend_root=None):
     """Render frames x variants for one attraction.
 
@@ -337,28 +366,40 @@ def render_all(scene, spec, build_fn, out_root, blend_root=None):
     os.makedirs(out, exist_ok=True)
     frames = spec.get("frames", 1)
     variants = spec.get("variants", 1)
+    # How many camera angles this attraction actually needs. Radially
+    # symmetric things (fountain, drop tower, tea cups) look identical from
+    # all four, so rendering them four times would quadruple their bytes for
+    # nothing. Anything with a front -- a stall counter, a house door, a
+    # ferris wheel's plane -- needs all four.
+    rots = spec.get("rot", 1)
 
     for v in range(variants):
-        clear()
-        setup(scene, spec["w"], spec["h"])
-        setup_light(scene)
-        driver = build_fn(v)
-        if blend_root and wants_blend(spec, v):
-            if callable(driver):
-                driver(0, frames)
-            save_blend(spec, v, blend_root)
-        for f in range(frames):
-            if callable(driver):
-                driver(f, frames)
-            elif driver is not None:
-                driver.rotation_euler = (0, 0, f * (2 * math.pi / frames))
-            scene.render.filepath = os.path.join(out, "v%d_f%02d.png" % (v, f))
-            bpy.ops.render.render(write_still=True)
+        for r in range(rots):
+            clear()
+            setup(scene, spec["w"], spec["h"])
+            setup_light(scene)
+            driver = build_fn(v)
+            apply_view_rotation(r)
+            if blend_root and r == 0 and wants_blend(spec, v):
+                if callable(driver):
+                    driver(0, frames)
+                save_blend(spec, v, blend_root)
+            for f in range(frames):
+                if callable(driver):
+                    driver(f, frames)
+                elif driver is not None:
+                    driver.rotation_euler = (0, 0, f * (2 * math.pi / frames))
+                # Row index is variant-major so a sheet stays readable:
+                # all four angles of variant 0, then variant 1, and so on.
+                scene.render.filepath = os.path.join(
+                    out, "v%d_f%02d.png" % (v * rots + r, f))
+                bpy.ops.render.render(write_still=True)
 
     meta = {
         "id": spec["id"],
         "frames": frames,
-        "variants": variants,
+        "variants": variants * rots,
+        "rot": rots,
         "sprite": [spec["w"], spec["h"]],
         "tiles": spec.get("tiles", 1),
         "supersample": SS,

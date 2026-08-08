@@ -21,6 +21,7 @@
  */
 
 import { loadSheet } from './atlas';
+import { rotation } from './camera';
 import { STRIPS } from './sprites/generated-strips';
 
 /** Must match main.ts's Guest constructor palette, in order. */
@@ -49,6 +50,15 @@ export function colorRow(color: string): number {
 }
 
 /** Nearest of the four walk directions to the guest's current heading. */
+/**
+ * Facing index, adjusted for the camera rotation.
+ *
+ * People need NO extra renders to support map rotation, unlike the buildings:
+ * their four facings are already the four 90-degree steps, so viewing a figure
+ * facing direction f from a camera rotated by r is identical to viewing a
+ * figure facing (f - r) from the unrotated camera. Turning the sheet index is
+ * exactly equivalent to re-rendering it, and free.
+ */
 function dirRow(dx: number, dy: number): number {
   if (dx === 0 && dy === 0) return 0;
   let best = 0;
@@ -62,7 +72,7 @@ function dirRow(dx: number, dy: number): number {
       best = i;
     }
   }
-  return best;
+  return ((best - rotation) % 4 + 4) % 4;
 }
 
 /**

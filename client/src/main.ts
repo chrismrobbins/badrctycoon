@@ -37,6 +37,13 @@ import {
 import { simClock, isNight, advanceSimClock, setIsNight } from './render/clock';
 import { drawEntrance as drawEntranceImpl, drawParkFence as drawParkFenceImpl } from './render/sprites/scenery';
 import { SPRITES } from './render/sprites';
+import {
+    setRotation, setGridSize, rotation, depthOf,
+} from './render/camera';
+import {
+    panDelta, panKeyDown, panKeyUp, clearHeldKeys,
+    MIN_ZOOM, MAX_ZOOM,
+} from './render/navigation';
 import { drawGuestSprite } from './render/guestsprite';
 import {
     drawBreakdownSmoke as drawBreakdownSmokeImpl, drawRainFX as drawRainFXImpl,
@@ -868,6 +875,9 @@ function drawFireworks() { drawFireworksImpl(ctx); }
 // ────── Main Render Loop ──────
 
 function render() {
+    // Rotation happens about the grid centre, so camera.ts needs the current
+    // size. Set here rather than at boot because land expansion grows it.
+    setGridSize(S.gridSize);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     const isDark = document.documentElement.classList.contains('dark');
     const na = window._nightAlpha || 0;
@@ -996,7 +1006,7 @@ function render() {
                 const aKey = `${x},${y}`;
                 // Depth = the block's FRONT corner tile, so nothing behind
                 // it can ever paint over the structure.
-                drawables.push({ d: x + y + 2 * (sz - 1), fn: () => {
+                drawables.push({ d: depthOf(x, y) + 2 * (sz - 1), fn: () => {
                     // Structures are authored to the pad's real footprint
                     setPad(sz);
                     SPRITES[cell]?.(ctx, center.x, center.y, S);
@@ -1007,7 +1017,7 @@ function render() {
                 }});
             } else {
                 if (cell === 'lamp') lampGlows.push({ x: screenPos.x, y: screenPos.y });
-                drawables.push({ d: x + y, fn: () => {
+                drawables.push({ d: depthOf(x, y), fn: () => {
                     // The gate is not an attraction; it is drawn once, below.
                     if (cell !== 'entrance') SPRITES[cell]?.(ctx, screenPos.x, screenPos.y, S);
                     if (RIDE_TYPES.has(cell)) {
@@ -1293,7 +1303,34 @@ function buildInCell(x, y) {
     updateUI();
 }
 
-// Event Listeners — build, pan (right/middle/Shift-drag), zoom (wheel)
+
+// ── Camera rotation ──
+// Spinning about the grid centre keeps the park on screen, but the point the
+// player was actually looking at still drifts, because pan is in screen space
+// and the projection under it just changed. So: remember which map tile is at
+// the centre of the viewport, rotate, then pan so that same tile is back under
+// the crosshair. Without this, every rotation throws the view somewhere else
+// and the feature feels broken rather than useful.
+function rotateView(delta) {
+    const before = toMap(canvas.width / 2, canvas.height / 2);
+    setRotation(rotation + delta);
+    const after = toScreen(before.x, before.y);
+    const o = camOffset();
+    // Where that tile now lands vs where we want it (viewport centre).
+    panX += canvas.width / 2 - (after.x * zoom + o.x);
+    panY += canvas.height / 2 - (after.y * zoom + o.y);
+    logEvent(`View rotated — facing ${['north', 'east', 'south', 'west'][rotation]}.`, 'info');
+}
+
+/** Frame the whole park, whatever its size and rotation. */
+function recenterView() {
+    const c = (S.gridSize - 1) / 2;
+    const p = toScreen(c, c);
+    panX = -p.x * zoom;
+    panY = -p.y * zoom + (canvas.height / 2 - (canvas.height / 4 + 50));
+}
+
+// Event Listeners — build, pan (drag/keys), zoom (wheel), rotate (Q/E)
 canvas.addEventListener('mousemove', (e) => {
     if (isPanning) {
         panX += e.clientX - panStart.x;
@@ -1303,7 +1340,30 @@ canvas.addEventListener('mousemove', (e) => {
     }
     handleInteraction(e);
 });
-canvas.addEventListener('touchmove', (e) => { e.preventDefault(); handleInteraction(e); }, {passive: false});
+// Touch: one finger builds (as before), TWO fingers navigate. Without this a
+// tablet could only paint -- there was no way to pan or zoom at all.
+let pinch = null;
+function touchMid(e) {
+    const a = e.touches[0], b = e.touches[1];
+    return { x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2,
+             d: Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY) };
+}
+canvas.addEventListener('touchmove', (e) => {
+    e.preventDefault();
+    if (e.touches.length >= 2) {
+        isDragging = false;               // cancel any build the first finger started
+        const m = touchMid(e);
+        if (pinch) {
+            panX += m.x - pinch.x;
+            panY += m.y - pinch.y;
+            if (pinch.d > 0) zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom * (m.d / pinch.d)));
+        }
+        pinch = m;
+        return;
+    }
+    pinch = null;
+    handleInteraction(e);
+}, {passive: false});
 canvas.addEventListener('mousedown', (e) => {
     if (e.button === 1 || e.button === 2 || e.shiftKey) {
         isPanning = true;
@@ -1339,13 +1399,17 @@ canvas.addEventListener('wheel', (e) => {
     const my = (e.clientY - rect.top) * (canvas.height / rect.height);
     const o = camOffset();
     const wx = (mx - o.x) / zoom, wy = (my - o.y) / zoom;
-    zoom = Math.min(1.8, Math.max(0.4, zoom * (e.deltaY < 0 ? 1.1 : 0.9)));
+    zoom = Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, zoom * (e.deltaY < 0 ? 1.1 : 0.9)));
     panX = mx - canvas.width / 2 - wx * zoom;
     panY = my - (canvas.height / 4 + 50) - wy * zoom;
 }, { passive: false });
-canvas.addEventListener('touchstart', (e) => { isDragging = true; handleInteraction(e); });
+canvas.addEventListener('touchstart', (e) => {
+    if (e.touches.length >= 2) { pinch = touchMid(e); isDragging = false; return; }
+    isDragging = true;
+    handleInteraction(e);
+});
 window.addEventListener('mouseup', () => { isDragging = false; isPanning = false; });
-window.addEventListener('touchend', () => isDragging = false);
+window.addEventListener('touchend', () => { isDragging = false; pinch = null; });
 
 // Ride name editing — commit as you type
 const rideNameInput = document.getElementById('ride-name') as HTMLInputElement;
@@ -1366,6 +1430,14 @@ window.addEventListener('keydown', (e) => {
     }
     const k = e.key.toLowerCase();
     if ((e.ctrlKey || e.metaKey) && k === 'z') { e.preventDefault(); undoLast(); return; }
+    // Held-key panning: the handler only records state; the frame loop moves
+    // the camera, so speed doesn't depend on the OS key-repeat rate.
+    if (!e.ctrlKey && !e.metaKey && !e.altKey && panKeyDown(k)) { e.preventDefault(); return; }
+    if (k === 'q') { rotateView(-1); return; }
+    if (k === 'e') { rotateView(1); return; }
+    if (k === '[') { zoom = Math.max(MIN_ZOOM, zoom * 0.85); return; }
+    if (k === ']') { zoom = Math.min(MAX_ZOOM, zoom * 1.18); return; }
+    if (k === 'c' || k === 'home') { recenterView(); return; }
     if (e.key === 'Escape') {
         if (!document.getElementById('mgmt').classList.contains('hidden')) closeMgmt();
         else if (inspectedGuest) closeGuestPanel();
@@ -1380,6 +1452,11 @@ window.addEventListener('keydown', (e) => {
     if (k === 'm') { document.getElementById('mgmt').classList.contains('hidden') ? openMgmt() : closeMgmt(); return; }
     if (k === 'n') { toggleMinimap(); return; }
 });
+window.addEventListener('keyup', (e) => { panKeyUp(e.key.toLowerCase()); });
+// A keyup that lands on another window would otherwise leave the park
+// drifting forever once focus comes back.
+window.addEventListener('blur', clearHeldKeys);
+
 // Keep open panels' live numbers ticking
 setInterval(() => {
     if (document.hidden) return;
@@ -1564,6 +1641,11 @@ function simTick() {
 function frame(now: number) {
     const wall = Math.min(now - lastFrameAt, MAX_CATCHUP_MS);
     lastFrameAt = now;
+
+    // Camera movement uses WALL time, not sim time: the view keeps moving
+    // while the game is paused.
+    const nav = panDelta(wall, zoom);
+    if (nav.dx || nav.dy) { panX += nav.dx; panY += nav.dy; }
 
     const simMs = wall * gameSpeed;
     advanceSimClock(simMs);

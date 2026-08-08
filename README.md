@@ -12,6 +12,18 @@ npm run build      # tsc --noEmit && vite build
 npm test           # Playwright smoke suite
 ```
 
+## Controls
+
+| | |
+|---|---|
+| **WASD** / arrows | Pan (hold — speed scales with zoom) |
+| **Q** / **E** | Rotate the park a quarter turn |
+| Scroll, **[** / **]** | Zoom (0.28×–3.2×) |
+| **C** | Recentre on the park |
+| Right-drag, middle-drag, Shift+drag | Pan with the mouse |
+| Two fingers | Pan and pinch-zoom on touch |
+| **1–9**, **B** | Tools / bulldozer · **M** management · **N** minimap · **Space** pause |
+
 ## Status
 
 **Phases 0–5 done; phase 6 partial.** Typecheck clean, 61 tests (55 pass with no backend
@@ -110,6 +122,22 @@ out of the same cached PNG via CSS `background-position`
 bytes. The crop is needed because a cell is mostly padding: the figure's feet sit at the cell
 centre, which is the anchor the renderer needs but leaves a ~20px person adrift in a 64px box.
 
+**Rotation.** The park spins in quarter turns. A sprite renderer can't orbit a
+real camera, so this works the way isometric games have always done it: the map is rotated about
+the grid centre ([camera.ts](client/src/render/camera.ts)'s `rotateTile`) and each structure is
+drawn from a sprite baked at the matching angle. Three things this forces:
+
+- **Depth is `rx + ry` in *rotated* space**, not `x + y`. Getting that wrong is the classic
+  rotation bug — everything still draws, but structures behind you paint over ones in front.
+  `depthOf()` exists so no call site does the arithmetic itself.
+- **Only asymmetric sprites pay for it.** Anything with a front — a stall counter, a house door,
+  the ferris wheel's plane — is rendered at 4 angles (`rot: 4` in the MANIFEST). Radially
+  symmetric ones (fountain, drop tower, tea cups, carousel) stay at 1, because four identical
+  copies would just quadruple their bytes.
+- **People need no extra renders at all.** Their four facings are already the four 90° steps, so
+  a figure facing `f` under camera rotation `r` is identical to one facing `f - r` unrotated.
+  Turning the sheet index is exactly equivalent to re-rendering, and free.
+
 Three rules the pipeline enforces so this can't rot:
 
 - **Every strip keeps its original vector function as a fallback.** A slow load or a 404 degrades
@@ -126,12 +154,16 @@ Three rules the pipeline enforces so this can't rot:
 `tests/sprites.spec.ts` imports the generated table and fails if any PNG's real dimensions
 disagree with it, which is the failure a screenshot test sails straight past.
 
-**Cost: 0.87 MB of sheets** (22 sheets, including guests and staff) against a ~140 KB JS bundle. Sheets are packed to a 256-colour
+**Cost: 2.4 MB of sheets** (22 sheets, including guests and staff) against a ~140 KB JS bundle. Sheets are packed to a 256-colour
 palette: these are flat-shaded renders of a handful of materials, so quantising is near-lossless
 (measured mean error 1–2/255, indistinguishable side by side) for ~25% of the bytes — 2.9 MB
 truecolour became 0.75 MB. **128 colours is not safe**: it visibly dithers the large flat
 gradients on the ride pads. Because the palette did the work, no sprite had to give up animation
 frames to pay for it.
+
+Rotation is what took the total from 0.87 MB to 2.4 MB — eleven attractions now ship four angles
+each. The ferris wheel alone is 802 KB (12 frames × 4 angles × 176×272 × 2×); dropping it to 8
+frames would save ~270 KB if that ever matters.
 
 ## Where this is going
 

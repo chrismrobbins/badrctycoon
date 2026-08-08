@@ -134,9 +134,9 @@ for (const id of ids) {
 
   const bytes = (await readFile(dest)).length;
   totalBytes += bytes;
-  specs.push({ id, frames: meta.frames, variants: meta.variants, w: W, h: H, tiles: meta.tiles, bytes, margin: worst });
+  specs.push({ id, frames: meta.frames, variants: meta.variants, rot: meta.rot || 1, w: W, h: H, tiles: meta.tiles, bytes, margin: worst });
   console.log(
-    `${id.padEnd(14)} ${String(meta.frames).padStart(2)}f x ${meta.variants}v  ` +
+    `${id.padEnd(14)} ${String(meta.frames).padStart(2)}f x ${meta.variants}v${(meta.rot || 1) > 1 ? ` (${meta.rot} angles)` : ''}  ` +
     `${String(W).padStart(3)}x${String(H).padStart(3)}  ` +
     `margin ${worst === Infinity ? '-' : worst.toFixed(1) + 'px'}  ` +
     `${(bytes / 1024).toFixed(0)} KB`,
@@ -148,7 +148,7 @@ for (const id of ids) {
 // different frame count silently starts blitting sliced-up garbage, so they
 // are generated from the same data the sheets were packed with.
 const rows = specs
-  .map((s) => `  ${s.id}: { frames: ${s.frames}, variants: ${s.variants}, w: ${s.w}, h: ${s.h}, tiles: ${s.tiles} },`)
+  .map((s) => `  ${s.id}: { frames: ${s.frames}, variants: ${s.variants}, rot: ${s.rot}, w: ${s.w}, h: ${s.h}, tiles: ${s.tiles} },`)
   .join('\n');
 
 await writeFile(
@@ -165,8 +165,17 @@ await writeFile(
 export interface GeneratedStrip {
   /** Animation frames, laid out left to right. */
   frames: number;
-  /** Deterministic variants, laid out top to bottom, picked by tileHash. */
+  /**
+   * Rows of the sheet, top to bottom. A row is \`variant * rot + rotation\`:
+   * deterministic tileHash variants, each rendered at \`rot\` camera angles.
+   */
   variants: number;
+  /**
+   * Camera angles baked for this sprite: 4 for anything with a front, 1 for
+   * radially symmetric things that look identical from every side (rendering
+   * those four times would quadruple their bytes for no visible difference).
+   */
+  rot: number;
   /** Logical size in world px. */
   w: number;
   h: number;

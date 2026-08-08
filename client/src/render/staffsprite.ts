@@ -17,6 +17,7 @@
  */
 
 import { loadSheet } from './atlas';
+import { rotation } from './camera';
 import { STRIPS } from './sprites/generated-strips';
 import type { StaffKindId } from '../content';
 
@@ -52,6 +53,15 @@ export function outfitIndex(kind: StaffKindId, name: string): number {
   return ENTERTAINER_OUTFITS[nameHash(name) % ENTERTAINER_OUTFITS.length];
 }
 
+/**
+ * Facing index, adjusted for the camera rotation.
+ *
+ * People need NO extra renders to support map rotation, unlike the buildings:
+ * their four facings are already the four 90-degree steps, so viewing a figure
+ * facing direction f from a camera rotated by r is identical to viewing a
+ * figure facing (f - r) from the unrotated camera. Turning the sheet index is
+ * exactly equivalent to re-rendering it, and free.
+ */
 function dirRow(dx: number, dy: number): number {
   if (dx === 0 && dy === 0) return 1; // idle: face front-ish rather than away
   let best = 0;
@@ -63,7 +73,7 @@ function dirRow(dx: number, dy: number): number {
       best = i;
     }
   }
-  return best;
+  return ((best - rotation) % 4 + 4) % 4;
 }
 
 /** Row of the sheet for a given worker and heading. */

@@ -35,6 +35,7 @@
 
 import { simClock } from './clock';
 import { tileHash } from './iso';
+import { rotation } from './camera';
 import type { GameState } from '../core/state';
 import { PACK_SCALE, type GeneratedStrip } from './sprites/generated-strips';
 
@@ -147,14 +148,20 @@ export function loadStrip(id: string, g: GeneratedStrip, opts: StripOptions): St
           ? Math.floor(((simClock % opts.msPerLoop) / opts.msPerLoop) * g.frames) % g.frames
           : 0;
 
+      // Rows are variant-major: `variant * rot + cameraAngle`. A sprite with
+      // rot === 1 is radially symmetric and looks the same from every side, so
+      // it ignores the camera rotation entirely rather than paying for four
+      // identical copies.
+      const baseVariants = Math.max(1, Math.floor(g.variants / g.rot));
       // Same hash the vector art used, so a tile keeps the species/pose it
       // had before the swap. Clamped because tileHash can return exactly 1.
       const variant =
-        g.variants > 1 ? Math.min(g.variants - 1, Math.floor(tileHash(cx, cy) * g.variants)) : 0;
+        baseVariants > 1 ? Math.min(baseVariants - 1, Math.floor(tileHash(cx, cy) * baseVariants)) : 0;
+      const row = variant * g.rot + (g.rot > 1 ? rotation : 0);
 
       ctx.drawImage(
         img,
-        frame * fw, variant * fh, fw, fh,
+        frame * fw, row * fh, fw, fh,
         cx - halfW, cy - halfH, g.w, g.h,
       );
 

@@ -1306,34 +1306,34 @@ def build_staff(variant):
 MANIFEST = [
     # scenery -- 1x1
     dict(id="tree",         tiles=1, w=96,  h=128, frames=8,  variants=3, build=build_tree),
-    dict(id="bench",        tiles=1, w=96,  h=96,  frames=1,  variants=2, build=build_bench),
+    dict(id="bench",        tiles=1, rot=4, w=96,  h=96,  frames=1,  variants=2, build=build_bench),
     dict(id="trashcan",     tiles=1, w=96,  h=96,  frames=1,  variants=1, build=build_trashcan),
     dict(id="flowerbed",    tiles=1, w=96,  h=96,  frames=6,  variants=2, build=build_flowerbed),
     dict(id="lamp",         tiles=1, w=96,  h=128, frames=1,  variants=1, build=build_lamp),
     dict(id="fountain",     tiles=1, w=96,  h=112, frames=8,  variants=1, build=build_fountain),
     # shops -- 1x1
-    dict(id="foodstall",    tiles=1, w=96,  h=128, frames=8,  variants=1, build=build_foodstall),
-    dict(id="drinkstall",   tiles=1, w=96,  h=128, frames=8,  variants=1, build=build_drinkstall),
-    dict(id="restroom",     tiles=1, w=96,  h=112, frames=1,  variants=1, build=build_restroom),
-    dict(id="balloonstand", tiles=1, w=96,  h=144, frames=8,  variants=1, build=build_balloonstand),
+    dict(id="foodstall",    tiles=1, rot=4, w=96,  h=128, frames=8,  variants=1, build=build_foodstall),
+    dict(id="drinkstall",   tiles=1, rot=4, w=128, h=144, frames=8,  variants=1, build=build_drinkstall),
+    dict(id="restroom",     tiles=1, rot=4, w=96,  h=112, frames=1,  variants=1, build=build_restroom),
+    dict(id="balloonstand", tiles=1, rot=4, w=96,  h=144, frames=8,  variants=1, build=build_balloonstand),
     # rides -- 1x1
     dict(id="carousel",     tiles=1, w=96,  h=128, frames=16, variants=1, build=build_carousel),
     dict(id="teacups",      tiles=1, w=96,  h=112, frames=16, variants=1, build=build_teacups),
     dict(id="bumper",       tiles=1, w=96,  h=112, frames=16, variants=1, build=build_bumper),
     dict(id="droptower",    tiles=1, w=96,  h=208, frames=16, variants=1, build=build_droptower),
     # rides -- 2x2
-    dict(id="ship",         tiles=2, w=176, h=208, frames=16, variants=1, build=build_ship),
-    dict(id="haunted",      tiles=2, w=176, h=176, frames=1,  variants=1, build=build_haunted),
-    dict(id="gokarts",      tiles=2, w=176, h=144, frames=12, variants=1, build=build_gokarts),
-    dict(id="ferriswheel",  tiles=2, w=176, h=272, frames=12, variants=1, build=build_ferriswheel),
-    dict(id="coaster",      tiles=2, w=176, h=176, frames=12, variants=1, build=build_coaster),
+    dict(id="ship",         tiles=2, rot=4, w=176, h=208, frames=16, variants=1, build=build_ship),
+    dict(id="haunted",      tiles=2, rot=4, w=176, h=176, frames=1,  variants=1, build=build_haunted),
+    dict(id="gokarts",      tiles=2, rot=4, w=176, h=144, frames=12, variants=1, build=build_gokarts),
+    dict(id="ferriswheel",  tiles=2, rot=4, w=176, h=272, frames=12, variants=1, build=build_ferriswheel),
+    dict(id="coaster",      tiles=2, rot=4, w=176, h=208, frames=12, variants=1, build=build_coaster),
     # guests -- not a tile attraction; 7 shirt colours x 4 walk directions
     dict(id="guest",        tiles=1, w=48,  h=64,  frames=6,
          variants=len(GUEST_COLORS) * len(GUEST_DIRS), build=build_guest),
     dict(id="staff",        tiles=1, w=56,  h=72,  frames=6,
          variants=len(STAFF_OUTFITS) * len(GUEST_DIRS), build=build_staff),
     # rides -- 4x4
-    dict(id="megacoaster",  tiles=4, w=320, h=352, frames=12, variants=1, build=build_megacoaster),
+    dict(id="megacoaster",  tiles=4, rot=4, w=320, h=352, frames=12, variants=1, build=build_megacoaster),
 ]
 
 
