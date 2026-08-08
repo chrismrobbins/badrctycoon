@@ -6,6 +6,7 @@ import { builtValue, parkRating, parkValue } from './sim/park';
 import { AWARD_DEFS, evaluateAwards as evaluateAwardsSim } from './sim/awards';
 import { getSceneryBonusAt } from './sim/scenery';
 import { isNightAt } from './sim/time';
+import { litterAt, dropLitter, recomputeCleanliness } from './sim/litter';
 import { createApi } from './net/client';
 import { mountAuthUI } from './ui/auth';
 import { getPlaytimeMs, startPlaytimeTracking, ensureAtLeast as ensurePlaytimeAtLeast } from './save/playtime';
@@ -274,29 +275,7 @@ const unearn = (amount: number, bucket: Fin.IncomeBucket) => Fin.unearn(S, amoun
 const unspend = (amount: number, bucket: Fin.ExpenseBucket) => Fin.unspend(S, amount, bucket);
 const sumOf = Fin.sumOf;
 
-// ── Litter ──
-function litterAt(x, y) { return S.litter[`${x},${y}`] || 0; }
-
-function dropLitter(x, y) {
-    // A trash can within 2 tiles almost always prevents littering
-    for (let ox = -2; ox <= 2; ox++) {
-        for (let oy = -2; oy <= 2; oy++) {
-            if (S.map[x + ox]?.[y + oy] === 'trashcan' && Math.random() < 0.9) return;
-        }
-    }
-    const k = `${x},${y}`;
-    S.litter[k] = Math.min(3, (S.litter[k] || 0) + 1);
-}
-
-function recomputeCleanliness() {
-    let paths = 0, dirty = 0;
-    for (let x = 0; x < S.gridSize; x++) {
-        for (let y = 0; y < S.gridSize; y++) {
-            if (S.map[x][y] === 'path') { paths++; dirty += litterAt(x, y); }
-        }
-    }
-    S.cleanliness = paths ? Math.max(0, 100 - (dirty / paths) * 55) : 100;
-}
+// ── Litter ── moved to sim/litter.ts (phase 4); call sites below pass S.
 
 // ── Staff ──
 function pathTiles() {
@@ -414,7 +393,7 @@ function updateStaff() {
         if (w.kind === 'janitor') {
             // Sweep the tile underfoot clean, and knock back the neighbours
             let didClean = false;
-            if (litterAt(w.x, w.y) > 0) {
+            if (litterAt(S, w.x, w.y) > 0) {
                 S.litter[`${w.x},${w.y}`] = 0;
                 didClean = true;
                 w.cleaned = (w.cleaned || 0) + 1;
@@ -423,11 +402,11 @@ function updateStaff() {
                 const k = `${w.x + dx},${w.y + dy}`;
                 if (S.litter[k] > 0) { S.litter[k] = Math.max(0, S.litter[k] - 1); didClean = true; }
             }
-            if (didClean) { w.sweepFx = 20; recomputeCleanliness(); }
+            if (didClean) { w.sweepFx = 20; recomputeCleanliness(S); }
 
             // Re-route to the nearest mess when the current plan is spent
             if (!w.route || !w.route.length || --w.reroute <= 0) {
-                w.route = bfsRoute(w, (x, y) => litterAt(x, y) > 0);
+                w.route = bfsRoute(w, (x, y) => litterAt(S, x, y) > 0);
                 w.reroute = 120;
             }
             w.task = didClean ? 'sweeping up' : (w.route && w.route.length ? `heading to litter (${w.route.length} tiles)` : 'patrolling — all clean');
@@ -523,7 +502,7 @@ function drawStaffOne(w) {
 
 // ── Litter rendering ──
 function drawLitterAt(x, y, sx, sy) {
-    const n = litterAt(x, y);
+    const n = litterAt(S, x, y);
     if (!n) return;
     for (let i = 0; i < n * 2; i++) {
         const h = tileHash(sx + i * 31, sy - i * 17);
@@ -993,7 +972,7 @@ function guestThought(g) {
     if (g.bladder > 88) return 'I really need to find a restroom.';
     if (g.thirst > 85) return 'I am so thirsty. Where are the drinks?';
     if (g.hunger > 85) return 'I could eat an entire funnel cake right now.';
-    if (litterAt(g.x, g.y) > 1) return 'This place is filthy. Does anyone clean up?';
+    if (litterAt(S, g.x, g.y) > 1) return 'This place is filthy. Does anyone clean up?';
     if (g.happiness < 25) return 'I want to go home.';
     if (g.happiness > 85) return 'This is the best park I have ever been to!';
     if (isNight) return 'The lights look lovely at night.';
@@ -1398,7 +1377,7 @@ class Guest {
         }
         if (S.weather === 'rain') this.happiness = Math.max(0, this.happiness - 0.005);
         // Filth is depressing; a bench underfoot is a nice rest
-        const filth = litterAt(this.x, this.y);
+        const filth = litterAt(S, this.x, this.y);
         if (filth) this.happiness = Math.max(0, this.happiness - 0.02 * filth);
 
         // If queued at a ride, wait
@@ -1442,7 +1421,7 @@ class Guest {
                         earn(sd.price, 'shops');
                         this.money -= sd.price;
                         S.shopSales++;
-                        if (need?.litters) dropLitter(this.x, this.y);
+                        if (need?.litters) dropLitter(S, this.x, this.y);
                         const sk = `${nx},${ny}`;
                         if (!S.shopStats[sk]) S.shopStats[sk] = { sales: 0, earned: 0 };
                         S.shopStats[sk].sales++;
@@ -1478,7 +1457,7 @@ class Guest {
             }
 
             // Occasionally drop trash while strolling
-            if (Math.random() < 0.006 && S.map[this.x]?.[this.y] === 'path') dropLitter(this.x, this.y);
+            if (Math.random() < 0.006 && S.map[this.x]?.[this.y] === 'path') dropLitter(S, this.x, this.y);
 
             // Normal path wandering
             let neighbors = [];
@@ -1794,7 +1773,7 @@ function economyTick() {
     }
 
     // Guests, staff and FX advance in simTick(); this is the slow tick.
-    recomputeCleanliness();
+    recomputeCleanliness(S);
     checkObjectives();
 }
 
@@ -4557,7 +4536,7 @@ renderPalette();          // must precede refreshPalette(): it creates the butto
 refreshPalette();
 setTool(currentTool, null);
 if (restored) hydrateEntities();
-recomputeCleanliness();
+recomputeCleanliness(S);
 syncThemeIcon();
 document.getElementById('btn-minimap').classList.add('text-blue-500');
 if (restored) {
@@ -4585,7 +4564,7 @@ function applyExternalState(newState: GameState) {
  *  arrived after boot instead of at it. */
 function refreshAfterExternalStateChange() {
     hydrateEntities();
-    recomputeCleanliness();
+    recomputeCleanliness(S);
     renderObjectives();
     updateLandButton();
     refreshPalette();
