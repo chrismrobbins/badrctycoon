@@ -30,7 +30,7 @@ export const STRIPS: Record<string, GeneratedStrip> = {
   drinkstall: { frames: 8, variants: 1, w: 96, h: 128, tiles: 1 },
   droptower: { frames: 16, variants: 1, w: 96, h: 208, tiles: 1 },
   ferriswheel: { frames: 12, variants: 1, w: 176, h: 272, tiles: 2 },
-  flowerbed: { frames: 1, variants: 2, w: 96, h: 96, tiles: 1 },
+  flowerbed: { frames: 6, variants: 2, w: 96, h: 96, tiles: 1 },
   foodstall: { frames: 8, variants: 1, w: 96, h: 128, tiles: 1 },
   fountain: { frames: 8, variants: 1, w: 96, h: 112, tiles: 1 },
   gokarts: { frames: 12, variants: 1, w: 176, h: 144, tiles: 2 },

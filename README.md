@@ -103,8 +103,12 @@ Three rules the pipeline enforces so this can't rot:
 `tests/sprites.spec.ts` imports the generated table and fails if any PNG's real dimensions
 disagree with it, which is the failure a screenshot test sails straight past.
 
-**Cost: ~3.0 MB of sheets** against a 138 KB JS bundle. The ferris wheel alone is 930 KB (12
-frames × 176×272 × 2×); dropping it to 8 frames would save ~300 KB if that ever matters.
+**Cost: 0.75 MB of sheets** against a ~139 KB JS bundle. Sheets are packed to a 256-colour
+palette: these are flat-shaded renders of a handful of materials, so quantising is near-lossless
+(measured mean error 1–2/255, indistinguishable side by side) for ~25% of the bytes — 2.9 MB
+truecolour became 0.75 MB. **128 colours is not safe**: it visibly dithers the large flat
+gradients on the ride pads. Because the palette did the work, no sprite had to give up animation
+frames to pay for it.
 
 ## Where this is going
 

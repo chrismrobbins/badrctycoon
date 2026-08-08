@@ -182,6 +182,7 @@ def build_flowerbed(variant):
 
     palettes = [["#ef4444", "#f472b6", "#fbbf24"], ["#a855f7", "#60a5fa", "#f9a8d4"]]
     cols = palettes[variant % len(palettes)]
+    clusters = []
     for ci, c in enumerate(cols):
         fb = bmesh.new()
         for i in range(7):
@@ -190,7 +191,7 @@ def build_flowerbed(variant):
             x, y = math.cos(a) * rr, math.sin(a) * rr
             cyl(fb, uh(0.5), uv(4), (x, y, L + uv(2)), segments=4)
             sphere(fb, uh(2.1), (x, y, L + uv(4.6)), scale=(1, 1, 0.6), segments=6)
-        obj("Flower%d" % ci, fb, [mat("bloom%d" % ci, c, 0.6)])
+        clusters.append(obj("Flower%d" % ci, fb, [mat("bloom%d" % ci, c, 0.6)]))
 
     leaves = bmesh.new()
     for i in range(10):
@@ -199,7 +200,15 @@ def build_flowerbed(variant):
         sphere(leaves, uh(2.4), (math.cos(a) * rr, math.sin(a) * rr, L + uv(1.6)),
                scale=(1, 1, 0.35), segments=6)
     obj("Leaves", leaves, [mat("foliage", "#15803d", 0.8)])
-    return None
+
+    def drive(f, n):
+        # The vector drawFlowerBed() swayed each cluster by sin(t + i) * 0.7px.
+        # Kept, per cluster and phase-offset the same way, rather than dropped:
+        # a bed of dead-still flowers next to swaying trees reads as broken.
+        t = f / n * 2 * math.pi
+        for ci, o in enumerate(clusters):
+            o.location = (uh(1.0) * math.sin(t + ci), 0, 0)
+    return drive
 
 
 def build_lamp(variant):
@@ -997,7 +1006,7 @@ MANIFEST = [
     dict(id="tree",         tiles=1, w=96,  h=128, frames=8,  variants=3, build=build_tree),
     dict(id="bench",        tiles=1, w=96,  h=96,  frames=1,  variants=2, build=build_bench),
     dict(id="trashcan",     tiles=1, w=96,  h=96,  frames=1,  variants=1, build=build_trashcan),
-    dict(id="flowerbed",    tiles=1, w=96,  h=96,  frames=1,  variants=2, build=build_flowerbed),
+    dict(id="flowerbed",    tiles=1, w=96,  h=96,  frames=6,  variants=2, build=build_flowerbed),
     dict(id="lamp",         tiles=1, w=96,  h=128, frames=1,  variants=1, build=build_lamp),
     dict(id="fountain",     tiles=1, w=96,  h=112, frames=8,  variants=1, build=build_fountain),
     # shops -- 1x1

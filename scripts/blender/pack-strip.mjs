@@ -123,7 +123,13 @@ for (const id of ids) {
     },
   })
     .composite(tiles)
-    .png({ compressionLevel: 9, palette: false })
+    // 256-colour palette. These are flat-shaded renders of a handful of
+    // materials, so they quantise almost losslessly: measured against the
+    // truecolour output, mean error is 1-2/255 and the two are
+    // indistinguishable side by side, for ~25% of the bytes (2.9 MB -> 0.75 MB
+    // across the set). 128 colours is NOT safe -- it visibly dithers the
+    // large flat gradients on the ferris wheel deck and the ride pads.
+    .png({ compressionLevel: 9, palette: true, colors: 256, effort: 10 })
     .toFile(dest);
 
   const bytes = (await readFile(dest)).length;
