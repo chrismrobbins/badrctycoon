@@ -12,6 +12,7 @@ import {
     hireStaff as hireStaffSim, fireStaff as fireStaffSim,
 } from './sim/staff';
 import { OBJECTIVES, checkObjectives as checkObjectivesSim } from './sim/objectives';
+import { processRideQueues as processRideQueuesSim } from './sim/rides';
 import { createApi } from './net/client';
 import { mountAuthUI } from './ui/auth';
 import { getPlaytimeMs, startPlaytimeTracking, ensureAtLeast as ensurePlaytimeAtLeast } from './save/playtime';
@@ -1391,84 +1392,10 @@ class Guest {
 }
 
 // ────── Ride Queue Processing ──────
-
+// The tick logic moved to sim/rides.ts (phase 4); this wrapper just turns its
+// returned events into logEvent() calls, an ui/render concern.
 function processRideQueues() {
-    for (let key in S.rideQueues) {
-        const q = S.rideQueues[key];
-        const [ax, ay] = key.split(',').map(Number);
-        const type = S.map[ax]?.[ay];
-        if (!type || !RIDE_TYPES.has(type)) { delete S.rideQueues[key]; continue; }
-
-        const data = BUILD_DATA[type];
-
-        // ── Breakdowns ──
-        if (q.broken) {
-            q.repairTimer -= 1.5;
-            if (q.repairTimer <= 0) {
-                q.broken = false;
-                const bill = Math.ceil(data.cost * 0.08);
-                spend(bill, 'repairs');
-                logEvent(`${S.rideNames[key] || type} repaired — mechanic invoice: $${bill}.`, 'info');
-            }
-            continue;
-        }
-        if (Math.random() < 0.006 && (q.queue + q.ridersOnBoard) > 0) {
-            q.broken = true;
-            q.breakdowns = (q.breakdowns || 0) + 1;
-            q.repairTimer = 20 + Math.random() * 25;
-            logEvent(`${S.rideNames[key] || type} broke down! A mechanic has been dispatched.`, 'bad');
-            // Everyone bails from the queue, annoyed
-            for (let g of S.visualGuests) {
-                if (g.queuedAt === key) {
-                    g.happiness = Math.max(0, g.happiness - 20);
-                    g.queuedAt = null;
-                    g.queueTimer = 0;
-                }
-            }
-            q.queue = 0;
-            q.ridersOnBoard = 0;
-            continue;
-        }
-
-        q.cycleTimer += 1.5; // seconds per economy tick
-
-        if (q.cycleTimer >= data.cycleTime) {
-            // Ride cycle complete — riders disembark happy
-            if (q.riders === undefined) { q.riders = 0; q.earned = 0; q.breakdowns = 0; }
-            const sceneryBonus = getSceneryBonusAt(S, ax, ay);
-            const nightBonus = isNight ? data.nightBonus : 0;
-            const excitementTotal = data.excitement + sceneryBonus + nightBonus;
-
-            // Boost happiness for riders
-            let ridersProcessed = 0;
-            for (let g of S.visualGuests) {
-                if (g.queuedAt === key && ridersProcessed < q.ridersOnBoard) {
-                    g.happiness = Math.min(100, g.happiness + excitementTotal * 0.3);
-                    g.ridesRidden++;
-                    g.queuedAt = null;
-                    g.queueTimer = 0;
-                    ridersProcessed++;
-                }
-            }
-
-            // Revenue from riders
-            const ticketPrice = Math.ceil(data.cost * 0.005) + Math.floor(sceneryBonus * 0.5);
-            const revenue = q.ridersOnBoard * ticketPrice;
-            if (revenue > 0) {
-                earn(revenue, 'rides');
-                q.earned += revenue;
-                q.riders += ridersProcessed;
-                if (Math.random() > 0.7) {
-                    logEvent(`${S.rideNames[key] || type} earned $${revenue} from ${q.ridersOnBoard} riders!`, 'good');
-                }
-            }
-
-            // Load new riders from queue
-            q.ridersOnBoard = Math.min(q.queue, data.capacity);
-            q.queue -= q.ridersOnBoard;
-            q.cycleTimer = 0;
-        }
-    }
+    for (const e of processRideQueuesSim(S)) logEvent(e.msg, e.type);
 }
 
 // ────── Economy Loop ──────
