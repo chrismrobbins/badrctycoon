@@ -59,6 +59,9 @@ import {
     FIREWORK_COLORS, updateFireworks as updateFireworksImpl, drawFireworks as drawFireworksImpl,
     hasActiveFireworks as hasActiveFireworksImpl,
 } from './render/fireworks';
+import {
+    minimapOn, toggleMinimap as toggleMinimapImpl, drawMinimap as drawMinimapImpl, minimapJump as minimapJumpImpl,
+} from './render/minimap';
 import { createApi } from './net/client';
 import { mountAuthUI } from './ui/auth';
 import { getPlaytimeMs, startPlaytimeTracking, ensureAtLeast as ensurePlaytimeAtLeast } from './save/playtime';
@@ -459,64 +462,14 @@ function renderGuestStats() { renderGuestStatsSim(S); }
 // ═══════════════════════════════════════════════════════════
 //  MINIMAP
 // ═══════════════════════════════════════════════════════════
-let minimapOn = true;
+// toggleMinimap/drawMinimap/minimapJump moved to render/minimap.ts (phase 4).
+// minimapOn is imported directly (render()'s throttle check below only ever
+// reads it; toggleMinimap is the sole writer). minimapJump now returns the
+// new pan instead of assigning it -- its one call site, at the bottom of
+// this file, applies that to panX/panY itself.
 let miniFrame = 0;
-
-function toggleMinimap() {
-    minimapOn = !minimapOn;
-    document.getElementById('minimap-wrap').classList.toggle('hidden', !minimapOn);
-    document.getElementById('btn-minimap').classList.toggle('text-blue-500', minimapOn);
-}
-
-function drawMinimap() {
-    const mc = document.getElementById('minimap') as HTMLCanvasElement;
-    if (!mc || !minimapOn) return;
-    const m = mc.getContext('2d');
-    m.clearRect(0, 0, mc.width, mc.height);
-    m.fillStyle = '#0b1220';
-    m.fillRect(0, 0, mc.width, mc.height);
-    const cell = Math.min((mc.width - 8) / S.gridSize, (mc.height - 8) / S.gridSize);
-    const ox = (mc.width - cell * S.gridSize) / 2, oy = (mc.height - cell * S.gridSize) / 2;
-    // Land
-    m.fillStyle = '#14532d';
-    m.fillRect(ox, oy, cell * S.gridSize, cell * S.gridSize);
-    for (let x = 0; x < S.gridSize; x++) {
-        for (let y = 0; y < S.gridSize; y++) {
-            const c = S.map[x][y];
-            if (!c) continue;
-            m.fillStyle = RIDE_TYPES.has(c) ? (RIDE_ACCENT[c] || '#a855f7') : (MINI_COLORS[c] || '#cbd5e1');
-            m.fillRect(ox + x * cell, oy + y * cell, Math.max(1, cell), Math.max(1, cell));
-        }
-    }
-    // Guests
-    m.fillStyle = 'rgba(255,255,255,0.85)';
-    for (const g of S.visualGuests) m.fillRect(ox + g.x * cell, oy + g.y * cell, Math.max(1, cell * 0.5), Math.max(1, cell * 0.5));
-    // Staff
-    for (const w of S.staff) {
-        m.fillStyle = STAFF_KINDS[w.kind].color;
-        m.fillRect(ox + w.x * cell, oy + w.y * cell, Math.max(1.5, cell * 0.6), Math.max(1.5, cell * 0.6));
-    }
-    // Viewport rectangle — invert the camera transform at the 4 screen corners
-    const corners = [[0, 0], [canvas.width, 0], [canvas.width, canvas.height], [0, canvas.height]].map(([sx, sy]) => toMap(sx, sy));
-    const xs = corners.map(c => c.x), ys = corners.map(c => c.y);
-    const x0 = Math.max(0, Math.min(...xs)), x1 = Math.min(S.gridSize, Math.max(...xs));
-    const y0 = Math.max(0, Math.min(...ys)), y1 = Math.min(S.gridSize, Math.max(...ys));
-    m.strokeStyle = 'rgba(96,165,250,0.9)'; m.lineWidth = 1;
-    m.strokeRect(ox + x0 * cell, oy + y0 * cell, (x1 - x0) * cell, (y1 - y0) * cell);
-}
-
-function minimapJump(e) {
-    const mc = document.getElementById('minimap') as HTMLCanvasElement;
-    const r = mc.getBoundingClientRect();
-    const cell = Math.min((mc.width - 8) / S.gridSize, (mc.height - 8) / S.gridSize);
-    const ox = (mc.width - cell * S.gridSize) / 2, oy = (mc.height - cell * S.gridSize) / 2;
-    const gx = ((e.clientX - r.left) * (mc.width / r.width) - ox) / cell;
-    const gy = ((e.clientY - r.top) * (mc.height / r.height) - oy) / cell;
-    // Center the camera on that tile
-    const w = toScreen(gx, gy);
-    panX = -w.x * zoom;
-    panY = canvas.height / 2 - (canvas.height / 4 + 50) - w.y * zoom;
-}
+function toggleMinimap() { toggleMinimapImpl(); }
+function drawMinimap() { drawMinimapImpl(S, canvas, zoom, panX, panY); }
 
 // ────── Objectives ──────
 // OBJECTIVES data and the pure ladder-advance logic moved to
@@ -1481,7 +1434,11 @@ setInterval(() => {
 }, 700);
 
 // Minimap click-to-jump
-document.getElementById('minimap').addEventListener('click', minimapJump);
+document.getElementById('minimap').addEventListener('click', (e: MouseEvent) => {
+    const r = minimapJumpImpl(e, S, canvas, zoom);
+    panX = r.panX;
+    panY = r.panY;
+});
 
 // ── Theme ──
 // Moved here from the marketing nav's pill toggle. The initial .dark class is
