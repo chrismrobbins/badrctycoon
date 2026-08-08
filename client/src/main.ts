@@ -2,8 +2,7 @@ import './styles/app.css';
 import { createGameState, type RideQueue, type GameState } from './core/state';
 import { SAVE_KEY, loadFromLocalStorage, saveToLocalStorage } from './save/schema';
 import * as Fin from './sim/finance';
-import { builtValue, parkRating, parkValue } from './sim/park';
-import { AWARD_DEFS, evaluateAwards as evaluateAwardsSim } from './sim/awards';
+import { evaluateAwards as evaluateAwardsSim } from './sim/awards';
 import { getSceneryBonusAt } from './sim/scenery';
 import { isNightAt } from './sim/time';
 import { litterAt, dropLitter, recomputeCleanliness } from './sim/litter';
@@ -14,10 +13,14 @@ import {
 import { checkObjectives as checkObjectivesSim } from './sim/objectives';
 import { processRideQueues as processRideQueuesSim } from './sim/rides';
 import { createGuest, updateGuest as updateGuestSim } from './sim/guests';
-import { perceivedValue as perceivedValueSim, economyTick as economyTickSim, DAILY_INTEREST } from './sim/economy';
+import { perceivedValue as perceivedValueSim, economyTick as economyTickSim } from './sim/economy';
 import { logEvent } from './ui/eventlog';
 import { updateStatusBar as updateStatusBarSim } from './ui/statusbar';
 import { renderObjectives as renderObjectivesSim } from './ui/objectives';
+import {
+    openMgmt as openMgmtSim, closeMgmt as closeMgmtSim, renderMgmt as renderMgmtSim,
+    money, LOAN_LIMIT, mgmtTab,
+} from './ui/management';
 import { createApi } from './net/client';
 import { mountAuthUI } from './ui/auth';
 import { getPlaytimeMs, startPlaytimeTracking, ensureAtLeast as ensurePlaytimeAtLeast } from './save/playtime';
@@ -255,7 +258,6 @@ function demolishInspected() {
 //  PARK SYSTEMS — staff, litter, economy, research, awards
 // ═══════════════════════════════════════════════════════════
 
-const LOAN_LIMIT = 60000;
 let undoStack = [];
 
 // Research — rides unlock in order as you invest
@@ -269,7 +271,6 @@ const earn = (amount: number, bucket: Fin.IncomeBucket) => Fin.earn(S, amount, b
 const spend = (amount: number, bucket: Fin.ExpenseBucket) => Fin.spend(S, amount, bucket);
 const unearn = (amount: number, bucket: Fin.IncomeBucket) => Fin.unearn(S, amount, bucket);
 const unspend = (amount: number, bucket: Fin.ExpenseBucket) => Fin.unspend(S, amount, bucket);
-const sumOf = Fin.sumOf;
 
 // ── Litter ── moved to sim/litter.ts (phase 4); call sites below pass S.
 
@@ -498,170 +499,14 @@ function sfx(kind) {
 // ═══════════════════════════════════════════════════════════
 //  MANAGEMENT UI
 // ═══════════════════════════════════════════════════════════
-let mgmtTab = 'finance';
-
-function openMgmt(tab?) {
-    mgmtTab = tab || mgmtTab;
-    document.getElementById('mgmt').classList.remove('hidden');
-    document.querySelectorAll<HTMLElement>('.mgmt-tab').forEach(b => b.classList.toggle('active', b.dataset.tab === mgmtTab));
-    renderMgmt();
-}
-function closeMgmt() { document.getElementById('mgmt').classList.add('hidden'); }
-
-// `color` is an explicit CSS color — never rely on inherited text color,
-// which is white in dark mode and would vanish on a light panel.
-function row(label, value, color?) {
-    return `<div class="m-row"><span class="l">${label}</span><span class="r"${color ? ` style="color:${color}"` : ''}>${value}</span></div>`;
-}
-const C = { green: '#16a34a', red: '#ef4444', blue: '#2563eb', amber: '#f59e0b', purple: '#a855f7', slate: '#94a3b8' };
-const money = n => (n < 0 ? '-$' : '$') + Math.abs(Math.round(n)).toLocaleString();
-
-function renderMgmt() {
-    const el = document.getElementById('mgmt-body');
-    if (!el || document.getElementById('mgmt').classList.contains('hidden')) return;
-    let h = '';
-
-    if (mgmtTab === 'finance') {
-        const inc = sumOf(S.ledger.income), exp = sumOf(S.ledger.expense);
-        const dInc = sumOf(S.dayLedger.income), dExp = sumOf(S.dayLedger.expense);
-        const profit = dInc - dExp;
-        h += `<div class="m-grid3">
-            <div class="m-tile" style="background:rgba(34,197,94,0.1)"><div class="k" style="color:${C.green}">Cash</div><div class="v">${money(S.funds)}</div></div>
-            <div class="m-tile" style="background:rgba(59,130,246,0.1)"><div class="k" style="color:${C.blue}">Park Value</div><div class="v">${money(parkValue(S))}</div></div>
-            <div class="m-tile" style="background:${profit >= 0 ? 'rgba(16,185,129,0.1)' : 'rgba(239,68,68,0.1)'}"><div class="k" style="color:${profit >= 0 ? C.green : C.red}">Today's Profit</div><div class="v">${money(profit)}</div></div>
-        </div>`;
-        h += `<div class="m-grid2">
-            <div><div class="m-sec" style="color:${C.green}">Income (all time)</div>
-                ${row('Admissions', money(S.ledger.income.admission))}
-                ${row('Ride tickets', money(S.ledger.income.rides))}
-                ${row('Shop sales', money(S.ledger.income.shops))}
-                ${row('Objective bonuses', money(S.ledger.income.objectives))}
-                ${row('Loans drawn', money(S.ledger.income.loans))}
-                        ${row('Demolition refunds', money(S.ledger.income.refunds))}
-                ${row('Total', money(inc), C.green)}</div>
-            <div><div class="m-sec" style="color:${C.red}">Expenses (all time)</div>
-                ${row('Construction', money(S.ledger.expense.construction))}
-                ${row('Staff wages', money(S.ledger.expense.wages))}
-                ${row('Repairs', money(S.ledger.expense.repairs))}
-                ${row('Loan interest', money(S.ledger.expense.interest))}
-                ${row('Marketing', money(S.ledger.expense.marketing))}
-                ${row('Research', money(S.ledger.expense.research))}
-                ${row('Land', money(S.ledger.expense.land))}
-                ${row('Loan repayments', money(S.ledger.expense.loanRepaid))}
-                ${row('Total', money(exp), C.red)}</div>
-        </div>`;
-        h += `<div class="m-block">
-            <div class="m-sec">Admission Price</div>
-            <div class="m-flex">
-                <input id="price-slider" class="m-slider" type="range" min="0" max="40" value="${S.admissionPrice}" data-act="setAdmission">
-                <span id="price-label" style="font-weight:700;font-size:1.05rem;width:5rem;text-align:right;">${money(S.admissionPrice)}</span>
-            </div>
-            <div class="m-note">Guests will pay up to about <b>${money(perceivedValue())}</b> for a park like this. Charge more and attendance drops.</div>
-        </div>`;
-        h += `<div class="m-block">
-            <div class="m-sec">Loans</div>
-            ${row('Outstanding balance', money(S.loanBalance), S.loanBalance ? C.red : null)}
-            ${row('Daily interest', `${(DAILY_INTEREST * 100).toFixed(1)}% (${money(S.loanBalance * DAILY_INTEREST)}/day)`)}
-            ${row('Credit limit', money(LOAN_LIMIT))}
-            <div style="display:flex;gap:0.5rem;margin-top:0.75rem;">
-                <button class="m-btn blue" style="flex:1;padding:0.5rem;" data-act="borrow" data-arg="5000">Borrow $5,000</button>
-                <button class="m-btn green" style="flex:1;padding:0.5rem;" data-act="repay" data-arg="5000">Repay $5,000</button>
-            </div>
-        </div>`;
-    }
-
-    else if (mgmtTab === 'staff') {
-        h += `<div class="m-note" style="margin-bottom:1rem;">Wages are paid out of your cash every in-game day. Staff walk your paths — build paths so they can reach things.</div>`;
-        for (const k in STAFF_KINDS) {
-            const s = STAFF_KINDS[k], n = staffCount(S, k as keyof typeof STAFF_KINDS);
-            h += `<div class="m-card">
-                <div class="m-icon" style="background:${s.color}22;color:${s.color}"><i class="fas ${s.icon}"></i></div>
-                <div style="flex:1;min-width:0;">
-                    <div style="font-weight:700;font-size:0.875rem;">${s.label} <span style="color:${C.slate};font-weight:400;">× ${n}</span></div>
-                    <div class="m-note" style="margin-top:0;">${s.blurb} · ${money(s.wage)}/day each</div>
-                </div>
-                <button class="m-btn red m-iconbtn" data-act="fireStaff" data-arg="${k}" ${n ? '' : 'disabled'}><i class="fas fa-minus"></i></button>
-                <button class="m-btn green m-iconbtn" data-act="hireStaff" data-arg="${k}"><i class="fas fa-plus"></i></button>
-            </div>`;
-        }
-        h += `<div class="m-block">
-            ${row('Total staff', S.staff.length)}
-            ${row('Total daily wages', money(dailyWages(S)), C.red)}
-            ${row('Park cleanliness', `${Math.round(S.cleanliness)}%`, S.cleanliness > 80 ? C.green : S.cleanliness > 50 ? C.amber : C.red)}
-        </div>`;
-        if (S.staff.length) {
-            h += `<div style="margin-top:1rem;"><div class="m-sec">On Shift</div>` + S.staff.map(w =>
-                `<div style="display:flex;justify-content:space-between;font-size:11px;padding:2px 0;"><span><i class="fas ${STAFF_KINDS[w.kind].icon}" style="color:${STAFF_KINDS[w.kind].color};margin-right:0.375rem;"></i>${w.name}</span><span style="color:${C.slate};font-style:italic;">${w.task || 'starting shift'}</span></div>`
-            ).join('') + `</div>`;
-        }
-    }
-
-    else if (mgmtTab === 'marketing') {
-        h += `<div class="m-note" style="margin-bottom:1rem;">Campaigns temporarily raise how many guests show up. They stack with your rating and happiness.</div>`;
-        if (S.marketing.key) {
-            const c = MARKETING_CAMPAIGNS[S.marketing.key];
-            h += `<div class="m-tile" style="background:rgba(59,130,246,0.1);margin-bottom:1rem;">
-                <div style="font-weight:700;font-size:0.875rem;color:${C.blue}"><i class="fas fa-bullhorn" style="margin-right:0.25rem;"></i>${c.label} running</div>
-                <div class="m-note">+${Math.round(c.boost * 100)}% attendance · ${S.marketing.daysLeft} day(s) left</div>
-            </div>`;
-        }
-        for (const k in MARKETING_CAMPAIGNS) {
-            const c = MARKETING_CAMPAIGNS[k];
-            h += `<div class="m-card">
-                <div style="flex:1;"><div style="font-weight:700;font-size:0.875rem;">${c.label}</div>
-                <div class="m-note" style="margin-top:0;">+${Math.round(c.boost * 100)}% attendance for ${c.days} days</div></div>
-                <button class="m-btn blue" data-act="startCampaign" data-arg="${k}">${money(c.cost)}</button>
-            </div>`;
-        }
-        h += `<div class="m-block">
-            ${row('Current attendance', `${S.guests} guests`)}
-            ${row('Park rating', parkRating(S))}
-            ${row('Average happiness', `${Math.round(S.parkHappiness)}%`)}
-        </div>`;
-    }
-
-    else if (mgmtTab === 'research') {
-        const next = RESEARCH_ORDER.find(t => !S.research.unlocked.includes(t));
-        h += `<div class="m-note" style="margin-bottom:1rem;">Your R&amp;D team designs new attractions. Higher funding unlocks them faster — the cost is billed daily.</div>`;
-        if (next) {
-            h += `<div class="m-tile" style="background:rgba(168,85,247,0.1);margin-bottom:1rem;">
-                <div class="k" style="color:${C.purple}">Now designing</div>
-                <div style="font-weight:700;font-size:1rem;margin:2px 0 0.5rem;">${TYPE_LABEL[next]}</div>
-                <div class="meter"><span style="width:${Math.min(100, S.research.progress)}%;background:${C.purple}"></span></div>
-                <div class="m-note">${Math.floor(S.research.progress)}% complete</div>
-            </div>`;
-        } else {
-            h += `<div class="m-tile" style="background:rgba(34,197,94,0.1);margin-bottom:1rem;color:${C.green};font-weight:700;"><i class="fas fa-check-circle" style="margin-right:0.25rem;"></i>All attractions researched. Your engineers are napping.</div>`;
-        }
-        h += `<div class="m-sec">Daily Research Budget</div>
-        <div class="m-flex" style="margin-bottom:1.25rem;">
-            <input type="range" class="m-slider purple" min="0" max="500" step="25" value="${S.research.budget}" data-act="setResearchBudget">
-            <span style="font-weight:700;width:6rem;text-align:right;">${money(S.research.budget)}/day</span>
-        </div>`;
-        h += `<div class="m-sec">Attraction List</div><div class="m-list">`;
-        for (const t of RESEARCH_ORDER) {
-            const got = S.research.unlocked.includes(t);
-            h += `<div class="m-chip${got ? ' got' : ''}"><i class="fas ${got ? 'fa-check' : 'fa-lock'}"></i>${TYPE_LABEL[t]}<span class="sp">${money(BUILD_DATA[t].cost)}</span></div>`;
-        }
-        h += `</div>`;
-    }
-
-    else if (mgmtTab === 'awards') {
-        h += `<div class="m-note" style="margin-bottom:1rem;">Inspectors visit every few days. Meet the criteria and your park earns a permanent rating boost.</div>`;
-        for (const a of AWARD_DEFS) {
-            const won = S.awardsWon.find(w => w.id === a.id);
-            h += `<div class="m-card"${won ? ' style="background:rgba(234,179,8,0.1)"' : ''}>
-                <div class="m-icon" style="${won ? 'background:rgba(234,179,8,0.2);color:#eab308' : 'background:rgba(100,116,139,0.12);color:#94a3b8'}"><i class="fas ${a.icon}"></i></div>
-                <div style="flex:1;"><div style="font-weight:700;font-size:0.875rem;${won ? '' : `color:${C.slate}`}">${a.label}</div>
-                <div class="m-note" style="margin-top:0;">${won ? `Won on day ${won.day}` : 'Not yet earned'} · +${a.rating} rating</div></div>
-                ${won ? '<i class="fas fa-trophy" style="color:#eab308"></i>' : ''}
-            </div>`;
-        }
-        h += `<div class="m-block" style="font-weight:700;font-size:0.8rem;">${S.awardsWon.length} / ${AWARD_DEFS.length} awards won</div>`;
-    }
-
-    el.innerHTML = h;
-}
+// mgmtTab/openMgmt/closeMgmt/row/C/money/renderMgmt moved to ui/management.ts
+// (phase 4). Wrappers below keep the zero/one-arg signatures the ~10 call
+// sites throughout this file already use; `mgmtTab` is imported directly
+// since main.ts only ever reads it (hireStaff/fireStaff wrappers, the 'm'
+// keyboard shortcut) -- ui/management.ts is the only writer.
+function openMgmt(tab?) { openMgmtSim(S, tab); }
+function closeMgmt() { closeMgmtSim(); }
+function renderMgmt() { renderMgmtSim(S); }
 
 function perceivedValue() { return perceivedValueSim(S); }
 function setAdmission(v) {
