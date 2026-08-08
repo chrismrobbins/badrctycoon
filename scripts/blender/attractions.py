@@ -994,6 +994,91 @@ def build_megacoaster(variant):
     return drive
 
 
+
+# ==================================================================
+# GUESTS
+# ==================================================================
+
+# The seven shirt colours a Guest can be assigned (main.ts's Guest
+# constructor) and the four directions it can walk (sim/guests.ts DIRS).
+# Rows of the sheet are colour * 4 + direction; keep both lists in that order.
+GUEST_COLORS = ["#ef4444", "#3b82f6", "#eab308", "#ec4899", "#8b5cf6", "#10b981", "#f97316"]
+GUEST_DIRS = [(0, 1), (1, 0), (0, -1), (-1, 0)]     # sim/guests.ts DIRS, in order
+GUEST_SKIN = "#fcd9b6"
+GUEST_TROUSERS = "#334155"
+GUEST_HAIR = "#3f2d16"
+GUEST_SHOES = "#1c1917"
+
+
+def build_guest(variant):
+    """One guest: variant = colourIndex * 4 + directionIndex.
+
+    Authored facing +X and then rotated to the map direction, because model
+    space here IS map space (see kit.py) -- so a guest walking DIRS[i] just
+    needs rot Z = atan2(dy, dx).
+
+    Scale is deliberate: ~20px tall against a 64px tile. The vector original
+    was a 3px dot, but a figure much taller than this stops reading as a
+    crowd and starts competing with the rides for attention.
+    """
+    ci, di = divmod(variant, len(GUEST_DIRS))
+    shirt = mat("g_shirt%d" % ci, GUEST_COLORS[ci], 0.6)
+    skin = mat("g_skin", GUEST_SKIN, 0.65)
+    trousers = mat("g_trousers", GUEST_TROUSERS, 0.75)
+
+    root = empty("Guest")
+    dx, dy = GUEST_DIRS[di]
+    root.rotation_euler = (0, 0, math.atan2(dy, dx))
+
+    torso = bmesh.new()
+    box(torso, uh(5.0), uh(3.6), uv(8), (0, 0, uv(12)))
+    sphere(torso, uh(2.9), (0, 0, uv(16.2)), scale=(1.0, 0.85, 0.7), segments=8)
+    obj("Torso", torso, [shirt], parent=root)
+
+    head = bmesh.new()
+    sphere(head, uh(3.0), (0, 0, uv(18.6)), scale=(0.95, 0.95, 1.05), segments=10)
+    obj("Head", head, [skin], parent=root)
+
+    hair = bmesh.new()
+    sphere(hair, uh(3.05), (0, 0, uv(19.6)), scale=(0.95, 0.95, 0.6), segments=10)
+    obj("Hair", hair, [mat("g_hair", GUEST_HAIR, 0.8)], parent=root)
+
+    # Limbs pivot at hip/shoulder, so they are separate objects whose origin
+    # sits at the joint rather than at the model centre.
+    limbs = []
+    for side in (-1, 1):
+        leg = bmesh.new()
+        box(leg, uh(2.0), uh(2.0), uv(8), (0, 0, -uv(4)))
+        box(leg, uh(2.6), uh(2.4), uv(1.6), (uh(0.4), 0, -uv(8.4)))       # shoe
+        o = obj("Leg%d" % side, leg, [trousers, mat("g_shoes", GUEST_SHOES, 0.6)],
+                parent=root, loc=(0, side * uh(1.7), uv(8)))
+        for pg in o.data.polygons:
+            pg.material_index = 1 if pg.center.z < -uv(7.4) else 0
+        limbs.append(("leg", side, o))
+
+        arm = bmesh.new()
+        box(arm, uh(1.7), uh(1.7), uv(7), (0, 0, -uv(3.5)))
+        sphere(arm, uh(1.5), (0, 0, -uv(7)), segments=6)
+        o = obj("Arm%d" % side, arm, [shirt, skin], parent=root,
+                loc=(0, side * uh(3.4), uv(15.5)))
+        for pg in o.data.polygons:
+            pg.material_index = 1 if pg.center.z < -uv(6.0) else 0
+        limbs.append(("arm", side, o))
+
+    def drive(f, n):
+        # One full stride cycle across the sheet, so it loops. Arms swing
+        # opposite the leg on the same side, which is what stops it reading
+        # as a hopping doll.
+        t = f / n * 2 * math.pi
+        for kind, side, o in limbs:
+            swing = math.sin(t + (0 if side > 0 else math.pi))
+            amp = 0.55 if kind == "leg" else 0.40
+            o.rotation_euler = (0, swing * amp * (1 if kind == "leg" else -1), 0)
+        # Body rises slightly at mid-stride, as the legs pass under it.
+        root.location = (0, 0, abs(math.sin(t)) * uv(0.8))
+    return drive
+
+
 # ==================================================================
 # MANIFEST
 # ==================================================================
@@ -1025,6 +1110,9 @@ MANIFEST = [
     dict(id="gokarts",      tiles=2, w=176, h=144, frames=12, variants=1, build=build_gokarts),
     dict(id="ferriswheel",  tiles=2, w=176, h=272, frames=12, variants=1, build=build_ferriswheel),
     dict(id="coaster",      tiles=2, w=176, h=176, frames=12, variants=1, build=build_coaster),
+    # guests -- not a tile attraction; 7 shirt colours x 4 walk directions
+    dict(id="guest",        tiles=1, w=48,  h=64,  frames=6,
+         variants=len(GUEST_COLORS) * len(GUEST_DIRS), build=build_guest),
     # rides -- 4x4
     dict(id="megacoaster",  tiles=4, w=320, h=352, frames=12, variants=1, build=build_megacoaster),
 ]

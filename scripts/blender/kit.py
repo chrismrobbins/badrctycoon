@@ -270,6 +270,18 @@ def pad_fence(bm, tiles, h_px=7.0, inset=0.98, posts_per_side=4):
 
 # ------------------------------------------------------------------ render
 
+def wants_blend(spec, variant):
+    """Whether this variant is worth keeping an inspectable .blend for.
+
+    Variants are only worth a file each when they are genuinely different
+    models -- three tree species, a bench with and without a guest. Above a
+    handful they are the same model with a parameter changed (the guest's 28
+    rows are 7 shirt colours x 4 facings), and 28 near-identical .blends is
+    noise in the repo rather than something anyone will open. Keep the first.
+    """
+    return variant == 0 or spec.get("variants", 1) <= 4
+
+
 def save_blend(spec, variant, blend_root):
     """Write the built scene to a .blend so it can be opened and inspected.
 
@@ -305,6 +317,8 @@ def blend_only(scene, spec, build_fn, blend_root):
         setup(scene, spec["w"], spec["h"])
         setup_light(scene)
         driver = build_fn(v)
+        if not wants_blend(spec, v):
+            continue
         if callable(driver):
             driver(0, spec.get("frames", 1))     # settle on the canonical pose
         paths.append(save_blend(spec, v, blend_root))
@@ -329,7 +343,7 @@ def render_all(scene, spec, build_fn, out_root, blend_root=None):
         setup(scene, spec["w"], spec["h"])
         setup_light(scene)
         driver = build_fn(v)
-        if blend_root:
+        if blend_root and wants_blend(spec, v):
             if callable(driver):
                 driver(0, frames)
             save_blend(spec, v, blend_root)

@@ -37,6 +37,7 @@ import {
 import { simClock, isNight, advanceSimClock, setIsNight } from './render/clock';
 import { drawEntrance as drawEntranceImpl, drawParkFence as drawParkFenceImpl } from './render/sprites/scenery';
 import { SPRITES } from './render/sprites';
+import { drawGuestSprite } from './render/guestsprite';
 import {
     drawBreakdownSmoke as drawBreakdownSmokeImpl, drawRainFX as drawRainFXImpl,
     drawTooltip as drawTooltipImpl, drawRideQueue as drawRideQueueImpl,
@@ -685,12 +686,16 @@ class Guest {
     hasBalloon: boolean; balloonColor: string;
     name: string;
     money: number;
+    /** Per-guest walk-cycle offset, so a crowd doesn't stride in unison.
+     *  Display-only, like color/name -- sim/guests.ts knows nothing about it. */
+    walkPhase: number;
 
     constructor(startX, startY) {
         Object.assign(this, createGuest(startX, startY));
         this.color = ['#ef4444', '#3b82f6', '#eab308', '#ec4899', '#8b5cf6', '#10b981', '#f97316'][Math.floor(Math.random()*7)];
         this.balloonColor = FIREWORK_COLORS[Math.floor(Math.random() * FIREWORK_COLORS.length)];
         this.name = GUEST_FIRST[Math.floor(Math.random() * GUEST_FIRST.length)] + ' ' + GUEST_LAST[Math.floor(Math.random() * GUEST_LAST.length)];
+        this.walkPhase = Math.random() * 1000;
     }
 
     update() {
@@ -708,11 +713,32 @@ class Guest {
         let currentMapY = this.y + (this.targetY - this.y) * this.progress;
         let pos = toScreen(currentMapX, currentMapY);
 
-        ctx.beginPath();
         let hop = Math.sin(this.progress * Math.PI) * 4;
-        ctx.arc(pos.x, pos.y - 4 - hop, 3, 0, Math.PI*2);
-        ctx.fillStyle = this.color;
-        ctx.fill();
+
+        // Baked walking figure (render/guestsprite.ts). Its anchor is the
+        // guest's FEET, so the hop is applied to the blit position rather than
+        // being part of the animation -- the sheet's frames are the stride.
+        // walkPhase keeps guests out of lockstep; without it a crowd marches
+        // in formation. `?? 0` because saves written before this existed
+        // hydrate without the field.
+        const drewSprite = drawGuestSprite(
+            ctx, pos.x, pos.y - hop, this.color,
+            this.targetX - this.x, this.targetY - this.y,
+            simClock + (this.walkPhase ?? 0),
+        );
+
+        if (!drewSprite) {
+            // Vector fallback, unchanged: the sheet may not have decoded yet.
+            ctx.beginPath();
+            ctx.arc(pos.x, pos.y - 4 - hop, 3, 0, Math.PI * 2);
+            ctx.fillStyle = this.color;
+            ctx.fill();
+        }
+
+        // Overhead decorations sit above the head, which is much higher on the
+        // baked figure (~20px) than on the 3px dot it replaced.
+        const headY = pos.y - hop - (drewSprite ? 21 : 7);
+        const handY = pos.y - hop - (drewSprite ? 12 : 6);
 
         // Balloon on a string
         if (this.hasBalloon) {
@@ -720,11 +746,11 @@ class Guest {
             ctx.strokeStyle = 'rgba(148,163,184,0.7)';
             ctx.lineWidth = 0.5;
             ctx.beginPath();
-            ctx.moveTo(pos.x + 2, pos.y - 6 - hop);
-            ctx.lineTo(pos.x + 4, pos.y - 16 - hop + bob);
+            ctx.moveTo(pos.x + 2, handY);
+            ctx.lineTo(pos.x + 4, headY - 4 + bob);
             ctx.stroke();
             ctx.beginPath();
-            ctx.arc(pos.x + 4, pos.y - 19 - hop + bob, 3, 0, Math.PI * 2);
+            ctx.arc(pos.x + 4, headY - 7 + bob, 3, 0, Math.PI * 2);
             ctx.fillStyle = this.balloonColor;
             ctx.fill();
         }
@@ -734,12 +760,12 @@ class Guest {
             ctx.fillStyle = '#fbbf24';
             ctx.font = '6px sans-serif';
             ctx.textAlign = 'center';
-            ctx.fillText('★', pos.x, pos.y - 12 - hop);
+            ctx.fillText('★', pos.x, headY - 3);
         } else if (this.happiness <= 20) {
             ctx.fillStyle = '#ef4444';
             ctx.font = '6px sans-serif';
             ctx.textAlign = 'center';
-            ctx.fillText('!', pos.x, pos.y - 12 - hop);
+            ctx.fillText('!', pos.x, headY - 3);
         }
     }
 }

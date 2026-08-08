@@ -57,6 +57,56 @@ export interface Strip {
   draw: DrawFn;
 }
 
+export interface Sheet {
+  readonly ready: boolean;
+  /**
+   * Blit one cell, centred on (cx, cy). `col` is the animation frame and
+   * `row` the variant; both are taken modulo the sheet's real dimensions, so
+   * a caller computing a row from game state can't read off the end of the
+   * image and blit blank pixels.
+   */
+  drawCell(ctx: CanvasRenderingContext2D, cx: number, cy: number, col: number, row: number): void;
+}
+
+/**
+ * Lower-level accessor: a sheet addressed by explicit (col, row).
+ *
+ * loadStrip() below is this plus a policy for picking those two numbers from
+ * simClock and tileHash, which is right for anything sitting on a tile. Guests
+ * are not on a tile -- their row is shirt colour x facing, chosen per guest --
+ * so they use this directly.
+ */
+export function loadSheet(id: string, g: GeneratedStrip): Sheet {
+  let img: HTMLImageElement | null = null;
+  let ready = false;
+
+  if (typeof Image !== 'undefined') {
+    img = new Image();
+    img.onload = () => {
+      ready = true;
+    };
+    img.onerror = () => {
+      console.warn(`[atlas] /sprites/${id}.png failed to load`);
+    };
+    img.src = `/sprites/${id}.png`;
+  }
+
+  const fw = g.w * PACK_SCALE;
+  const fh = g.h * PACK_SCALE;
+
+  return {
+    get ready() {
+      return ready;
+    },
+    drawCell(ctx, cx, cy, col, row) {
+      if (!ready || !img) return;
+      const c = ((col % g.frames) + g.frames) % g.frames;
+      const r = ((row % g.variants) + g.variants) % g.variants;
+      ctx.drawImage(img, c * fw, r * fh, fw, fh, cx - g.w / 2, cy - g.h / 2, g.w, g.h);
+    },
+  };
+}
+
 export function loadStrip(id: string, g: GeneratedStrip, opts: StripOptions): Strip {
   let img: HTMLImageElement | null = null;
   let ready = false;
