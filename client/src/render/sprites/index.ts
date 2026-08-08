@@ -8,6 +8,7 @@ import {
 } from './scenery';
 import {
   drawBalloonStand, drawRestroom, drawRestroomNight, drawDrinkStall, drawFoodStall, drawGoKarts,
+  drawGoKartsNight,
 } from './shops';
 import {
   drawCarousel, drawCarouselNight, drawTeaCups, drawTeaCupsNight, drawBumperCars,
@@ -97,7 +98,7 @@ export const SPRITES: Record<string, SpriteFn> = {
   droptower: baked('droptower', 6000, drawDropTower, atNight(drawDropTowerNight)),
   ship: baked('ship', REV(0.002), drawSwingingShip, atNight(drawSwingingShipNight)),
   haunted: baked('haunted', 1, drawHauntedHouse, atNight(drawHauntedHouseNight)),
-  gokarts: baked('gokarts', REV(0.0012), drawGoKarts),
+  gokarts: baked('gokarts', REV(0.0012), drawGoKarts, atNight(drawGoKartsNight)),
   ferriswheel: baked('ferriswheel', REV(0.0005), drawFerrisWheel, atNight(drawFerrisWheelNight)),
   coaster: baked('coaster', 4600, drawCoaster, atNight(drawCoasterNight)),
   megacoaster: baked('megacoaster', 7000, drawMegaCoaster, atNight(drawMegaCoasterNight)),

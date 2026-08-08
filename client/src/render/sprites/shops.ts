@@ -1,4 +1,5 @@
 import { drawIsoDeck, setPad, PAD_W, PAD_H } from '../iso';
+import { TILE_W, TILE_H } from '../camera';
 import { simClock, isNight } from '../clock';
 
 interface KioskColors {
@@ -544,3 +545,56 @@ export function drawRestroomNight(ctx: CanvasRenderingContext2D, cx: number, cy:
   ctx.fill();
   ctx.shadowBlur = 0;
   }
+
+/**
+ * Headlight glow for the BAKED go-karts (render/atlas.ts), at night.
+ *
+ * Unlike the other drawXNight() functions, this one is not a lift-and-shift of
+ * the vector original: drawGoKarts()'s glow lives inside its kart loop and is
+ * positioned from that loop's five karts, which are laid out differently from
+ * the four on the Blender model. Reusing it would light empty tarmac.
+ *
+ * So these positions are derived from scripts/blender/attractions.py's
+ * build_gokarts instead, and must be kept in step with it:
+ *   - 4 karts, evenly spaced, on an ellipse of TRACK_A x TRACK_B tile units
+ *   - 12 frames per revolution
+ * The phase is quantised to those same 12 frames, or the glow slides smoothly
+ * while the karts underneath it step, and the two visibly separate.
+ */
+const GK_TRACK_A = 0.80;   // attractions.py build_gokarts TRACK_A
+const GK_TRACK_B = 0.54;   // ... TRACK_B
+const GK_KARTS = 4;
+const GK_FRAMES = 12;      // MANIFEST frames for "gokarts"
+const GK_MS_PER_LOOP = (2 * Math.PI) / 0.0012;
+const GK_LIFT_PX = 12;     // kart body height above the pad, in screen px
+
+export function drawGoKartsNight(ctx: CanvasRenderingContext2D, cx: number, cy: number): void {
+  const frame = Math.floor(((simClock % GK_MS_PER_LOOP) / GK_MS_PER_LOOP) * GK_FRAMES) % GK_FRAMES;
+  const phase = (frame / GK_FRAMES) * Math.PI * 2;
+
+  for (let i = 0; i < GK_KARTS; i++) {
+    const a = phase + (i * Math.PI * 2) / GK_KARTS;
+    // Model space is tile units, so this is just toScreen() on the offset.
+    const X = Math.cos(a) * GK_TRACK_A;
+    const Y = Math.sin(a) * GK_TRACK_B;
+    const kx = cx + (X - Y) * (TILE_W / 2);
+    const ky = cy + (X + Y) * (TILE_H / 2) - GK_LIFT_PX;
+
+    // Tangent of the ellipse, projected the same way, so the beam points the
+    // way the kart is actually travelling.
+    const dX = -Math.sin(a) * GK_TRACK_A;
+    const dY = Math.cos(a) * GK_TRACK_B;
+    const sdx = (dX - dY) * (TILE_W / 2);
+    const sdy = (dX + dY) * (TILE_H / 2);
+    const len = Math.hypot(sdx, sdy) || 1;
+    const ux = sdx / len, uy = sdy / len;
+
+    const g = ctx.createRadialGradient(kx, ky, 0, kx + ux * 16, ky + uy * 16, 16);
+    g.addColorStop(0, 'rgba(254,240,138,0.4)');
+    g.addColorStop(1, 'rgba(254,240,138,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(kx + ux * 9, ky + uy * 9, 16, 0, Math.PI * 2);
+    ctx.fill();
+  }
+}
