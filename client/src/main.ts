@@ -1176,6 +1176,12 @@ function buildInCell(x, y) {
                     cleared.push({ x: ax + dx, y: ay + dy });
                     S.map[ax+dx][ay+dy] = null;
                     delete S.anchorOf[`${ax+dx},${ay+dy}`];
+                    // A bulldozed path's litter entry otherwise leaks in the
+                    // save forever (ARCHITECTURE.md §3.6) -- it stops
+                    // affecting cleanliness the moment the tile is no longer
+                    // a path, but never gets deleted, and reappears if a
+                    // path is rebuilt on the same tile later.
+                    delete S.litter[`${ax+dx},${ay+dy}`];
                 }
             }
             pushUndo({ kind: 'demolish', type, cells: cleared, cost: data.cost, refund,
@@ -1197,6 +1203,7 @@ function buildInCell(x, y) {
             const sKey = `${x},${y}`;
             delete S.rideNames[sKey];
             delete S.shopStats[sKey];
+            delete S.litter[sKey]; // see the note in the anchored branch above
             if (inspectedKey === sKey) closeRidePanel();
             S.map[x][y] = null;
         }
