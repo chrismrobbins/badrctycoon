@@ -211,6 +211,7 @@ export function drawEntrance(ctx: CanvasRenderingContext2D, cx: number, cy: numb
       ctx.fill();
       ctx.shadowBlur = 0;
     }
+  
   }
 
   wall(springF, F);
@@ -564,22 +565,7 @@ export function drawLamp(ctx: CanvasRenderingContext2D, cx: number, cy: number):
   ctx.closePath();
   ctx.fill();
   // Halo + moths at night
-  if (isNight) {
-    const g = ctx.createRadialGradient(cx, gy - 31, 0, cx, gy - 31, 16);
-    g.addColorStop(0, 'rgba(254,240,138,0.4)');
-    g.addColorStop(1, 'rgba(254,240,138,0)');
-    ctx.fillStyle = g;
-    ctx.beginPath();
-    ctx.arc(cx, gy - 31, 16, 0, Math.PI * 2);
-    ctx.fill();
-    const mt = simClock * 0.004;
-    ctx.fillStyle = 'rgba(226,232,240,0.6)';
-    for (let i = 0; i < 2; i++) {
-      ctx.beginPath();
-      ctx.arc(cx + Math.sin(mt + i * 3) * 7, gy - 31 + Math.cos(mt * 1.3 + i * 2) * 5, 0.8, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
+  if (isNight) drawLampNight(ctx, cx, cy);
 }
 
 export function drawFountain(ctx: CanvasRenderingContext2D, cx: number, cy: number): void {
@@ -630,3 +616,28 @@ export function drawFountain(ctx: CanvasRenderingContext2D, cx: number, cy: numb
     ctx.fill();
   }
 }
+
+
+
+/** Night-only lights for drawLamp. Split out so the baked sprite
+ *  (render/atlas.ts) can blit the day structure and still add these on
+ *  top -- main.ts tints the scene at night, but emissive detail has to be
+ *  drawn, not dimmed. drawLamp() still calls it, so the vector fallback
+ *  is unchanged. */
+export function drawLampNight(ctx: CanvasRenderingContext2D, cx: number, cy: number): void {
+  const gy = cy - 2;
+  const g = ctx.createRadialGradient(cx, gy - 31, 0, cx, gy - 31, 16);
+  g.addColorStop(0, 'rgba(254,240,138,0.4)');
+  g.addColorStop(1, 'rgba(254,240,138,0)');
+  ctx.fillStyle = g;
+  ctx.beginPath();
+  ctx.arc(cx, gy - 31, 16, 0, Math.PI * 2);
+  ctx.fill();
+  const mt = simClock * 0.004;
+  ctx.fillStyle = 'rgba(226,232,240,0.6)';
+  for (let i = 0; i < 2; i++) {
+    ctx.beginPath();
+    ctx.arc(cx + Math.sin(mt + i * 3) * 7, gy - 31 + Math.cos(mt * 1.3 + i * 2) * 5, 0.8, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  }

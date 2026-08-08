@@ -64,24 +64,47 @@ ledger rules.
 
 ## Graphics
 
-Sprites are hand-written canvas paths (`client/src/render/sprites/`). The **carousel** is the
-first one baked in Blender instead, as a pilot for a pre-rendered pipeline — the same trick
-RollerCoaster Tycoon used, and it fits because the game's 2:1 dimetric projection is one an
-orthographic camera reproduces exactly.
+**Every attraction sprite is baked in Blender** rather than drawn with canvas paths — the same
+trick RollerCoaster Tycoon used. It fits because the game's 2:1 dimetric projection is one an
+orthographic camera reproduces *exactly*: at rot X 60° / Z 45° the ground squash is
+`sin 30° = 0.5`, so a 1×1 Blender unit lands precisely on the 64×32 tile. Verified by rendering
+a bare tile and measuring it (63.5 × 32 px, centred), not by eye.
 
 ```bash
-blender --background --python scripts/blender/carousel.py   # -> 16 frames
-node scripts/blender/pack-strip.mjs carousel                # -> client/public/sprites/carousel.png
+blender --background --python scripts/blender/attractions.py   # 20 models -> frames + .blend
+node scripts/blender/pack-strip.mjs                            # -> sheets + generated-strips.ts
 ```
 
-The camera at rot X 60° / Z 45° gives a ground squash of `sin 30° = 0.5`, so a 1×1 Blender unit
-lands exactly on the 64×32 tile — verified by rendering a bare tile and measuring it. Strips are
-packed at 2× because zoom clamps to 1.8; they animate off `simClock`, so they pause when the game
-does. **Every strip keeps its original vector function as a fallback** ([render/atlas.ts](client/src/render/atlas.ts)),
-so a slow load or a 404 degrades to the art that shipped before rather than a hole in the park.
+| Path | What it is |
+|---|---|
+| [`scripts/blender/attractions.py`](scripts/blender/attractions.py) | **Source of truth** — geometry, palette, per-frame motion, and the MANIFEST of frame sizes |
+| [`scripts/blender/kit.py`](scripts/blender/kit.py) | Shared camera/lighting/primitives — the part that must stay identical so everything lands on one grid |
+| `scripts/blender/blend/*.blend` | Openable Blender files, one per model. **Regenerated from the `.py`** — inspect them, don't edit them |
+| `client/public/sprites/*.png` | The packed sheets the game loads. Build artifacts |
+| [`client/src/render/atlas.ts`](client/src/render/atlas.ts) | Loads a sheet and blits it; owns the fallback and phase rules |
+| `client/src/render/sprites/generated-strips.ts` | Generated frame/variant/size table — never hand-edit |
 
-The `.py` is the source of truth — the PNG is a build artifact, don't hand-edit it. `tests/sprites.spec.ts`
-fails if a re-render leaves the strip's dimensions disagreeing with its `loadStrip()` spec.
+**Sheet layout**: columns are animation frames, rows are `tileHash` variants (three tree
+species, benches with and without a resting guest). Stored at 2× because zoom clamps to 1.8.
+
+Three rules the pipeline enforces so this can't rot:
+
+- **Every strip keeps its original vector function as a fallback.** A slow load or a 404 degrades
+  to the art that shipped before, never a hole in the park.
+- **Night lights are not baked.** [main.ts](client/src/main.ts) already tints the whole scene, so
+  baked sprites darken on their own — but lit windows and chasing bulbs are *emissive* and must
+  be drawn on top. Those live in the `drawXNight()` functions, which the vector originals still
+  call, so the fallback path is unchanged. Anything reading `GameState` (the trash can's overflow
+  indicator) stays canvas for the same reason.
+- **Clipping is a hard error.** The frame box is set per attraction by hand; get it wrong and
+  Blender silently renders a coaster with its lift hill sliced off. `pack-strip.mjs` refuses to
+  pack a sheet whose artwork touches the frame edge — it caught two of nineteen on the first pass.
+
+`tests/sprites.spec.ts` imports the generated table and fails if any PNG's real dimensions
+disagree with it, which is the failure a screenshot test sails straight past.
+
+**Cost: ~3.0 MB of sheets** against a 138 KB JS bundle. The ferris wheel alone is 930 KB (12
+frames × 176×272 × 2×); dropping it to 8 frames would save ~300 KB if that ever matters.
 
 ## Where this is going
 

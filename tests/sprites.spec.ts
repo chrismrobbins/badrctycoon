@@ -1,24 +1,31 @@
 import { test, expect } from '@playwright/test';
+import { STRIPS, PACK_SCALE } from '../client/src/render/sprites/generated-strips';
 
 /**
  * Guard for the pre-rendered sprite pipeline (render/atlas.ts).
  *
- * The strip's layout is described twice: once in the loadStrip() call in
- * render/sprites/index.ts, and once implicitly by the PNG that
- * scripts/blender/pack-strip.mjs produced. Nothing forces those to agree --
- * re-render with a different FRAMES or SPRITE_W in the .py, forget to update
- * the spec, and the game silently blits sliced-up garbage at the right size,
- * which is exactly the kind of bug a screenshot test misses and a human
- * notices three weeks later.
+ * A sheet's layout is described in two places: generated-strips.ts (which
+ * pack-strip.mjs writes) and the PNG itself. Nothing forces them to agree at
+ * runtime -- re-render with a different frame count, forget to re-pack, and
+ * atlas.ts blits sliced-up garbage at exactly the right size. That is the
+ * kind of bug a screenshot test sails past and a player notices weeks later.
  *
- * This asserts the two descriptions still match.
+ * Importing the generated table rather than restating it is the point: if
+ * pack-strip.mjs changes a number, this test changes with it, and only the
+ * PNG can be out of step.
  */
 
-// Mirrors the loadStrip() spec in client/src/render/sprites/index.ts.
-const STRIPS = [{ name: 'carousel', frames: 16, w: 96, h: 128, packScale: 2 }];
+const ids = Object.keys(STRIPS);
 
-for (const s of STRIPS) {
-  test(`${s.name} strip matches its loadStrip() spec`, async ({ page }) => {
+test('the generated strip table is not empty', () => {
+  // A pack-strip.mjs run that produced nothing would otherwise make every
+  // test below vacuously pass.
+  expect(ids.length).toBeGreaterThan(15);
+});
+
+for (const id of ids) {
+  const s = STRIPS[id];
+  test(`${id} sheet matches its generated spec`, async ({ page }) => {
     await page.goto('/');
     const dims = await page.evaluate(
       (src) =>
@@ -28,11 +35,11 @@ for (const s of STRIPS) {
           img.onerror = () => resolve(null);
           img.src = src;
         }),
-      `/sprites/${s.name}.png`,
+      `/sprites/${id}.png`,
     );
 
-    expect(dims, `/sprites/${s.name}.png must be served`).not.toBeNull();
-    expect(dims!.w).toBe(s.frames * s.w * s.packScale);
-    expect(dims!.h).toBe(s.h * s.packScale);
+    expect(dims, `/sprites/${id}.png must be served`).not.toBeNull();
+    expect(dims!.w, `${id}: ${s.frames} frames x ${s.w}px x ${PACK_SCALE}`).toBe(s.frames * s.w * PACK_SCALE);
+    expect(dims!.h, `${id}: ${s.variants} variants x ${s.h}px x ${PACK_SCALE}`).toBe(s.variants * s.h * PACK_SCALE);
   });
 }

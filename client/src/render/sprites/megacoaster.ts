@@ -11,13 +11,11 @@ interface TrackPoint {
 let megaCoasterPath: TrackPoint[] | null = null;
 let megaCoasterLoop: { c: TrackPoint; r: number } | null = null;
 
-/** MEGA COASTER (4×4) — the park's headliner: lift hill, drop, vertical
- *  loop, airtime hill, brake run. */
-export function drawMegaCoaster(ctx: CanvasRenderingContext2D, cx: number, cy: number): void {
-  drawIsoDeck(ctx, cx, cy, 0.96, '#39424f', '#252c36', 5);
-  drawPadFence(ctx, cx, cy - 5, 0.96, '#fb7185', 'rgba(251,113,133,0.4)');
-  const gy = cy - 5;
-
+/** Builds (once) and returns the mega coaster's track profile.
+ *  Hoisted out of drawMegaCoaster() because drawMegaCoasterNight() needs the
+ *  same points for its bulb chase, and in the baked path drawMegaCoaster()
+ *  never runs -- so the lazy memo would have stayed null. */
+function megaTrack(): TrackPoint[] {
   // Track: lift hill → drop → vertical loop → airtime hill → brake run
   if (!megaCoasterPath) {
     const pts: TrackPoint[] = [];
@@ -45,7 +43,18 @@ export function drawMegaCoaster(ctx: CanvasRenderingContext2D, cx: number, cy: n
     megaCoasterPath = pts;
     megaCoasterLoop = { c: LC, r: LR };
   }
-  const path = megaCoasterPath;
+  return megaCoasterPath!;
+}
+
+
+/** MEGA COASTER (4×4) — the park's headliner: lift hill, drop, vertical
+ *  loop, airtime hill, brake run. */
+export function drawMegaCoaster(ctx: CanvasRenderingContext2D, cx: number, cy: number): void {
+  drawIsoDeck(ctx, cx, cy, 0.96, '#39424f', '#252c36', 5);
+  drawPadFence(ctx, cx, cy - 5, 0.96, '#fb7185', 'rgba(251,113,133,0.4)');
+  const gy = cy - 5;
+
+  const path = megaTrack();
   const loop = megaCoasterLoop!;
 
   // Lattice support towers (skip the loop's own span — it self-supports)
@@ -208,16 +217,25 @@ export function drawMegaCoaster(ctx: CanvasRenderingContext2D, cx: number, cy: n
   }
 
   // Night bulbs along the whole layout
-  if (isNight) {
-    for (let i = 0; i < path.length; i += 5) {
-      const p = path[i];
-      ctx.fillStyle = Math.floor(simClock * 0.003 + i) % 2 ? '#fef08a' : '#fb7185';
-      ctx.shadowBlur = 6;
-      ctx.shadowColor = ctx.fillStyle;
-      ctx.beginPath();
-      ctx.arc(cx + p.x, gy + p.y - 8, 1.4, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.shadowBlur = 0;
-    }
-  }
+  if (isNight) drawMegaCoasterNight(ctx, cx, cy);
 }
+
+/** Night-only lights for drawMegaCoaster. Split out so the baked sprite
+ *  (render/atlas.ts) can blit the day structure and still add these on
+ *  top -- main.ts tints the scene at night, but emissive detail has to be
+ *  drawn, not dimmed. drawMegaCoaster() still calls it, so the vector fallback
+ *  is unchanged. */
+export function drawMegaCoasterNight(ctx: CanvasRenderingContext2D, cx: number, cy: number): void {
+  const path = megaTrack();
+  const gy = cy - 5;
+  for (let i = 0; i < path.length; i += 5) {
+    const p = path[i];
+    ctx.fillStyle = Math.floor(simClock * 0.003 + i) % 2 ? '#fef08a' : '#fb7185';
+    ctx.shadowBlur = 6;
+    ctx.shadowColor = ctx.fillStyle;
+    ctx.beginPath();
+    ctx.arc(cx + p.x, gy + p.y - 8, 1.4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+  }
+  }

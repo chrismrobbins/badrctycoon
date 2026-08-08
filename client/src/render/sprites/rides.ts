@@ -10,6 +10,29 @@ interface TrackPoint {
  *  `let coasterPath`. */
 let coasterPath: TrackPoint[] | null = null;
 
+/** Track profile, sampled once and reused. Spans the pad's full width.
+ *  Hoisted out of drawCoaster() because drawCoasterNight() needs the same
+ *  points to place its bulbs, and in the baked path drawCoaster() no longer
+ *  runs at all -- so the lazy memo would never have been filled. */
+function coasterTrack(): TrackPoint[] {
+  if (!coasterPath) {
+    const pts: TrackPoint[] = [];
+    const seg = (x0: number, y0: number, x1: number, y1: number, x2: number, y2: number, n: number) => {
+      for (let i = 0; i <= n; i++) {
+        const u = i / n,
+          v = 1 - u;
+        pts.push({ x: v * v * x0 + 2 * v * u * x1 + u * u * x2, y: v * v * y0 + 2 * v * u * y1 + u * u * y2 });
+      }
+    };
+    seg(-58, 2, -52, -104, -14, -28, 26); // lift hill
+    seg(-14, -28, 4, 10, 20, -20, 16); // valley dip
+    seg(20, -20, 38, -62, 58, 2, 22); // airtime hill → station
+    coasterPath = pts;
+  }
+  return coasterPath;
+}
+
+
 export function drawCarousel(ctx: CanvasRenderingContext2D, cx: number, cy: number): void {
   // 1×1 rides get the same treatment as the big ones: their own raised,
   // fenced pad sized to a single tile (half-extents TILE_W/2 × TILE_H/2).
@@ -125,18 +148,7 @@ export function drawCarousel(ctx: CanvasRenderingContext2D, cx: number, cy: numb
   ctx.fill();
 
   // Canopy bulbs at night
-  if (isNight) {
-    for (let i = 0; i < 14; i++) {
-      const a = t * 2 + (i * Math.PI) / 7;
-      ctx.beginPath();
-      ctx.arc(cx + Math.cos(a) * 30, gy - 29 + Math.sin(a) * 10, 1.5, 0, Math.PI * 2);
-      ctx.fillStyle = i % 2 ? '#fef08a' : '#f0abfc';
-      ctx.shadowBlur = 6;
-      ctx.shadowColor = ctx.fillStyle;
-      ctx.fill();
-      ctx.shadowBlur = 0;
-    }
-  }
+  if (isNight) drawCarouselNight(ctx, cx, cy);
 }
 
 export function drawTeaCups(ctx: CanvasRenderingContext2D, cx: number, cy: number): void {
@@ -227,22 +239,7 @@ export function drawTeaCups(ctx: CanvasRenderingContext2D, cx: number, cy: numbe
   }
 
   // Pole-mounted deck lights at night
-  if (isNight) {
-    for (let i = 0; i < 4; i++) {
-      const a = (i * Math.PI) / 2 + 0.4;
-      const lx = cx + Math.cos(a) * 26,
-        ly = gy - 2 + Math.sin(a) * 11;
-      ctx.fillStyle = '#94a3b8';
-      ctx.fillRect(lx - 0.6, ly - 12, 1.2, 12);
-      ctx.fillStyle = '#fef08a';
-      ctx.shadowBlur = 8;
-      ctx.shadowColor = '#fde047';
-      ctx.beginPath();
-      ctx.arc(lx, ly - 13, 2, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.shadowBlur = 0;
-    }
-  }
+  if (isNight) drawTeaCupsNight(ctx, cx, cy);
 }
 
 export function drawBumperCars(ctx: CanvasRenderingContext2D, cx: number, cy: number): void {
@@ -355,18 +352,7 @@ export function drawBumperCars(ctx: CanvasRenderingContext2D, cx: number, cy: nu
     ctx.stroke();
   }
   // Marquee at night
-  if (isNight) {
-    for (let i = 0; i < 10; i++) {
-      const a = (i / 10) * Math.PI * 2;
-      ctx.fillStyle = Math.floor(t * 2 + i) % 2 ? '#38bdf8' : '#fb7185';
-      ctx.shadowBlur = 6;
-      ctx.shadowColor = ctx.fillStyle;
-      ctx.beginPath();
-      ctx.arc(cx + Math.cos(a) * 27, gy - 30 + Math.sin(a) * 9, 1.4, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.shadowBlur = 0;
-    }
-  }
+  if (isNight) drawBumperCarsNight(ctx, cx, cy);
 }
 
 export function drawDropTower(ctx: CanvasRenderingContext2D, cx: number, cy: number): void {
@@ -496,20 +482,7 @@ export function drawDropTower(ctx: CanvasRenderingContext2D, cx: number, cy: num
   }
 
   // Tower lights at night
-  if (isNight) {
-    for (let i = 0; i < 9; i++) {
-      ctx.fillStyle = Math.floor(simClock * 0.004 + i) % 2 ? '#fef08a' : '#7dd3fc';
-      ctx.shadowBlur = 5;
-      ctx.shadowColor = ctx.fillStyle;
-      ctx.beginPath();
-      ctx.arc(cx - 7.5, gy - 14 - i * 10, 1.3, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.beginPath();
-      ctx.arc(cx + 7.5, gy - 14 - i * 10, 1.3, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.shadowBlur = 0;
-    }
-  }
+  if (isNight) drawDropTowerNight(ctx, cx, cy);
 }
 
 // ── 2×2 Ride Renderers (drawn at center of 2×2 block) ──
@@ -661,21 +634,7 @@ export function drawSwingingShip(ctx: CanvasRenderingContext2D, cx: number, cy: 
   ctx.stroke();
 
   // String lights along the A-frame at night
-  if (isNight) {
-    for (let i = 0; i <= 7; i++) {
-      const k = i / 7;
-      ctx.fillStyle = i % 2 ? '#fef08a' : '#7dd3fc';
-      ctx.shadowBlur = 4;
-      ctx.shadowColor = ctx.fillStyle;
-      ctx.beginPath();
-      ctx.arc(cx - 52 + k * 48, gy + 2 - k * 74, 1.5, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.beginPath();
-      ctx.arc(cx + 52 - k * 48, gy + 2 - k * 74, 1.5, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.shadowBlur = 0;
-    }
-  }
+  if (isNight) drawSwingingShipNight(ctx, cx, cy);
 }
 
 export function drawHauntedHouse(ctx: CanvasRenderingContext2D, cx: number, cy: number): void {
@@ -837,33 +796,7 @@ export function drawHauntedHouse(ctx: CanvasRenderingContext2D, cx: number, cy: 
   ctx.fillText('HAUNTED', cx, wallTop - 3);
 
   // Bats at night
-  if (isNight) {
-    const bt = simClock * 0.003;
-    for (let i = 0; i < 6; i++) {
-      const bx = cx + Math.sin(bt + i * 1.7) * 48;
-      const by = wallTop - 44 + Math.cos(bt * 0.7 + i * 1.3) * 16;
-      const flap = 2 + Math.sin(bt * 6 + i) * 2;
-      ctx.fillStyle = '#1e293b';
-      ctx.beginPath();
-      ctx.moveTo(bx, by);
-      ctx.lineTo(bx - 6, by - flap);
-      ctx.lineTo(bx - 2, by + 1.5);
-      ctx.fill();
-      ctx.beginPath();
-      ctx.moveTo(bx, by);
-      ctx.lineTo(bx + 6, by - flap);
-      ctx.lineTo(bx + 2, by + 1.5);
-      ctx.fill();
-    }
-    // Eerie mist pooling in the yard
-    const mist = ctx.createLinearGradient(cx, gy - 12, cx, gy + 12);
-    mist.addColorStop(0, 'rgba(74,222,128,0)');
-    mist.addColorStop(1, 'rgba(74,222,128,0.13)');
-    ctx.fillStyle = mist;
-    ctx.beginPath();
-    ctx.ellipse(cx, gy + 6, PAD_W * 0.9, PAD_H * 0.7, 0, 0, Math.PI * 2);
-    ctx.fill();
-  }
+  if (isNight) drawHauntedHouseNight(ctx, cx, cy);
 }
 
 export function drawFerrisWheel(ctx: CanvasRenderingContext2D, cx: number, cy: number): void {
@@ -1006,21 +939,7 @@ export function drawFerrisWheel(ctx: CanvasRenderingContext2D, cx: number, cy: n
   }
 
   // Night lights chasing the rim + spoke tips
-  if (isNight) {
-    for (let i = 0; i < 28; i++) {
-      const la = (i / 28) * Math.PI * 2;
-      const lit = Math.floor(simClock * 0.004 + i * 0.5) % 3 !== 0;
-      ctx.beginPath();
-      ctx.arc(cx + Math.cos(la) * wheelR, hubY + Math.sin(la) * wheelR, 1.6, 0, Math.PI * 2);
-      ctx.fillStyle = lit ? (i % 2 ? '#fef08a' : '#f0abfc') : 'rgba(148,163,184,0.4)';
-      if (lit) {
-        ctx.shadowBlur = 6;
-        ctx.shadowColor = ctx.fillStyle;
-      }
-      ctx.fill();
-      ctx.shadowBlur = 0;
-    }
-  }
+  if (isNight) drawFerrisWheelNight(ctx, cx, cy);
 }
 
 export function drawCoaster(ctx: CanvasRenderingContext2D, cx: number, cy: number): void {
@@ -1030,22 +949,7 @@ export function drawCoaster(ctx: CanvasRenderingContext2D, cx: number, cy: numbe
 
   const gy = cy - 4;
 
-  // Track profile, sampled once and reused. Spans the pad's full width.
-  if (!coasterPath) {
-    const pts: TrackPoint[] = [];
-    const seg = (x0: number, y0: number, x1: number, y1: number, x2: number, y2: number, n: number) => {
-      for (let i = 0; i <= n; i++) {
-        const u = i / n,
-          v = 1 - u;
-        pts.push({ x: v * v * x0 + 2 * v * u * x1 + u * u * x2, y: v * v * y0 + 2 * v * u * y1 + u * u * y2 });
-      }
-    };
-    seg(-58, 2, -52, -104, -14, -28, 26); // lift hill
-    seg(-14, -28, 4, 10, 20, -20, 16); // valley dip
-    seg(20, -20, 38, -62, 58, 2, 22); // airtime hill → station
-    coasterPath = pts;
-  }
-  const path = coasterPath;
+  const path = coasterTrack();
 
   // Lattice support towers from track down to the pad
   for (let i = 3; i < path.length - 3; i += 6) {
@@ -1182,16 +1086,190 @@ export function drawCoaster(ctx: CanvasRenderingContext2D, cx: number, cy: numbe
   }
 
   // Track bulbs at night
-  if (isNight) {
-    for (let i = 0; i < path.length; i += 6) {
-      const p = path[i];
-      ctx.fillStyle = Math.floor(simClock * 0.003 + i) % 2 ? '#fef08a' : '#fb7185';
-      ctx.shadowBlur = 5;
-      ctx.shadowColor = ctx.fillStyle;
-      ctx.beginPath();
-      ctx.arc(cx + p.x, gy + p.y - 7, 1.3, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.shadowBlur = 0;
-    }
-  }
+  if (isNight) drawCoasterNight(ctx, cx, cy);
 }
+
+/** Night-only lights for drawCarousel. Split out so the baked sprite
+ *  (render/atlas.ts) can blit the day structure and still add these on
+ *  top -- main.ts tints the scene at night, but emissive detail has to be
+ *  drawn, not dimmed. drawCarousel() still calls it, so the vector fallback
+ *  is unchanged. */
+export function drawCarouselNight(ctx: CanvasRenderingContext2D, cx: number, cy: number): void {
+  const gy = cy - 4;
+  const t = simClock * 0.001;
+  for (let i = 0; i < 14; i++) {
+    const a = t * 2 + (i * Math.PI) / 7;
+    ctx.beginPath();
+    ctx.arc(cx + Math.cos(a) * 30, gy - 29 + Math.sin(a) * 10, 1.5, 0, Math.PI * 2);
+    ctx.fillStyle = i % 2 ? '#fef08a' : '#f0abfc';
+    ctx.shadowBlur = 6;
+    ctx.shadowColor = ctx.fillStyle;
+    ctx.fill();
+    ctx.shadowBlur = 0;
+  }
+  }
+
+/** Night-only lights for drawTeaCups. Split out so the baked sprite
+ *  (render/atlas.ts) can blit the day structure and still add these on
+ *  top -- main.ts tints the scene at night, but emissive detail has to be
+ *  drawn, not dimmed. drawTeaCups() still calls it, so the vector fallback
+ *  is unchanged. */
+export function drawTeaCupsNight(ctx: CanvasRenderingContext2D, cx: number, cy: number): void {
+  const gy = cy - 4;
+  for (let i = 0; i < 4; i++) {
+    const a = (i * Math.PI) / 2 + 0.4;
+    const lx = cx + Math.cos(a) * 26,
+      ly = gy - 2 + Math.sin(a) * 11;
+    ctx.fillStyle = '#94a3b8';
+    ctx.fillRect(lx - 0.6, ly - 12, 1.2, 12);
+    ctx.fillStyle = '#fef08a';
+    ctx.shadowBlur = 8;
+    ctx.shadowColor = '#fde047';
+    ctx.beginPath();
+    ctx.arc(lx, ly - 13, 2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+  }
+  }
+
+/** Night-only lights for drawBumperCars. Split out so the baked sprite
+ *  (render/atlas.ts) can blit the day structure and still add these on
+ *  top -- main.ts tints the scene at night, but emissive detail has to be
+ *  drawn, not dimmed. drawBumperCars() still calls it, so the vector fallback
+ *  is unchanged. */
+export function drawBumperCarsNight(ctx: CanvasRenderingContext2D, cx: number, cy: number): void {
+  const gy = cy - 4;
+  const t = simClock * 0.002;
+  for (let i = 0; i < 10; i++) {
+    const a = (i / 10) * Math.PI * 2;
+    ctx.fillStyle = Math.floor(t * 2 + i) % 2 ? '#38bdf8' : '#fb7185';
+    ctx.shadowBlur = 6;
+    ctx.shadowColor = ctx.fillStyle;
+    ctx.beginPath();
+    ctx.arc(cx + Math.cos(a) * 27, gy - 30 + Math.sin(a) * 9, 1.4, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+  }
+  }
+
+/** Night-only lights for drawDropTower. Split out so the baked sprite
+ *  (render/atlas.ts) can blit the day structure and still add these on
+ *  top -- main.ts tints the scene at night, but emissive detail has to be
+ *  drawn, not dimmed. drawDropTower() still calls it, so the vector fallback
+ *  is unchanged. */
+export function drawDropTowerNight(ctx: CanvasRenderingContext2D, cx: number, cy: number): void {
+  const gy = cy - 4;
+  for (let i = 0; i < 9; i++) {
+    ctx.fillStyle = Math.floor(simClock * 0.004 + i) % 2 ? '#fef08a' : '#7dd3fc';
+    ctx.shadowBlur = 5;
+    ctx.shadowColor = ctx.fillStyle;
+    ctx.beginPath();
+    ctx.arc(cx - 7.5, gy - 14 - i * 10, 1.3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(cx + 7.5, gy - 14 - i * 10, 1.3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+  }
+  }
+
+/** Night-only lights for drawSwingingShip. Split out so the baked sprite
+ *  (render/atlas.ts) can blit the day structure and still add these on
+ *  top -- main.ts tints the scene at night, but emissive detail has to be
+ *  drawn, not dimmed. drawSwingingShip() still calls it, so the vector fallback
+ *  is unchanged. */
+export function drawSwingingShipNight(ctx: CanvasRenderingContext2D, cx: number, cy: number): void {
+  const gy = cy - 5;
+  for (let i = 0; i <= 7; i++) {
+    const k = i / 7;
+    ctx.fillStyle = i % 2 ? '#fef08a' : '#7dd3fc';
+    ctx.shadowBlur = 4;
+    ctx.shadowColor = ctx.fillStyle;
+    ctx.beginPath();
+    ctx.arc(cx - 52 + k * 48, gy + 2 - k * 74, 1.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.arc(cx + 52 - k * 48, gy + 2 - k * 74, 1.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+  }
+  }
+
+/** Night-only lights for drawHauntedHouse. Split out so the baked sprite
+ *  (render/atlas.ts) can blit the day structure and still add these on
+ *  top -- main.ts tints the scene at night, but emissive detail has to be
+ *  drawn, not dimmed. drawHauntedHouse() still calls it, so the vector fallback
+ *  is unchanged. */
+export function drawHauntedHouseNight(ctx: CanvasRenderingContext2D, cx: number, cy: number): void {
+  const gy = cy - 3;
+  const wallTop = gy - 52;
+  const bt = simClock * 0.003;
+  for (let i = 0; i < 6; i++) {
+    const bx = cx + Math.sin(bt + i * 1.7) * 48;
+    const by = wallTop - 44 + Math.cos(bt * 0.7 + i * 1.3) * 16;
+    const flap = 2 + Math.sin(bt * 6 + i) * 2;
+    ctx.fillStyle = '#1e293b';
+    ctx.beginPath();
+    ctx.moveTo(bx, by);
+    ctx.lineTo(bx - 6, by - flap);
+    ctx.lineTo(bx - 2, by + 1.5);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(bx, by);
+    ctx.lineTo(bx + 6, by - flap);
+    ctx.lineTo(bx + 2, by + 1.5);
+    ctx.fill();
+  }
+  // Eerie mist pooling in the yard
+  const mist = ctx.createLinearGradient(cx, gy - 12, cx, gy + 12);
+  mist.addColorStop(0, 'rgba(74,222,128,0)');
+  mist.addColorStop(1, 'rgba(74,222,128,0.13)');
+  ctx.fillStyle = mist;
+  ctx.beginPath();
+  ctx.ellipse(cx, gy + 6, PAD_W * 0.9, PAD_H * 0.7, 0, 0, Math.PI * 2);
+  ctx.fill();
+  }
+
+/** Night-only lights for drawFerrisWheel. Split out so the baked sprite
+ *  (render/atlas.ts) can blit the day structure and still add these on
+ *  top -- main.ts tints the scene at night, but emissive detail has to be
+ *  drawn, not dimmed. drawFerrisWheel() still calls it, so the vector fallback
+ *  is unchanged. */
+export function drawFerrisWheelNight(ctx: CanvasRenderingContext2D, cx: number, cy: number): void {
+  const gy = cy - 4;
+  const wheelR = 56;
+  const hubY = gy - 66;
+  for (let i = 0; i < 28; i++) {
+    const la = (i / 28) * Math.PI * 2;
+    const lit = Math.floor(simClock * 0.004 + i * 0.5) % 3 !== 0;
+    ctx.beginPath();
+    ctx.arc(cx + Math.cos(la) * wheelR, hubY + Math.sin(la) * wheelR, 1.6, 0, Math.PI * 2);
+    ctx.fillStyle = lit ? (i % 2 ? '#fef08a' : '#f0abfc') : 'rgba(148,163,184,0.4)';
+    if (lit) {
+      ctx.shadowBlur = 6;
+      ctx.shadowColor = ctx.fillStyle;
+    }
+    ctx.fill();
+    ctx.shadowBlur = 0;
+  }
+  }
+
+/** Night-only lights for drawCoaster. Split out so the baked sprite
+ *  (render/atlas.ts) can blit the day structure and still add these on
+ *  top -- main.ts tints the scene at night, but emissive detail has to be
+ *  drawn, not dimmed. drawCoaster() still calls it, so the vector fallback
+ *  is unchanged. */
+export function drawCoasterNight(ctx: CanvasRenderingContext2D, cx: number, cy: number): void {
+  const gy = cy - 4;
+  const path = coasterTrack();
+  for (let i = 0; i < path.length; i += 6) {
+    const p = path[i];
+    ctx.fillStyle = Math.floor(simClock * 0.003 + i) % 2 ? '#fef08a' : '#fb7185';
+    ctx.shadowBlur = 5;
+    ctx.shadowColor = ctx.fillStyle;
+    ctx.beginPath();
+    ctx.arc(cx + p.x, gy + p.y - 7, 1.3, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+  }
+  }

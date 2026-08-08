@@ -293,15 +293,7 @@ export function drawRestroom(ctx: CanvasRenderingContext2D, cx: number, cy: numb
   ctx.font = 'bold 6px sans-serif';
   ctx.textAlign = 'center';
   ctx.fillText('RESTROOM', cx, gy - 28.5);
-  if (isNight) {
-    ctx.fillStyle = '#4ade80';
-    ctx.shadowBlur = 8;
-    ctx.shadowColor = '#22c55e';
-    ctx.beginPath();
-    ctx.arc(cx, gy - 30, 1.2, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.shadowBlur = 0;
-  }
+  if (isNight) drawRestroomNight(ctx, cx, cy);
 }
 
 export function drawBalloonStand(ctx: CanvasRenderingContext2D, cx: number, cy: number): void {
@@ -536,3 +528,19 @@ export function drawGoKarts(ctx: CanvasRenderingContext2D, cx: number, cy: numbe
     ctx.fillRect(kx - 4, ky - 6, 8, 1.5);
   }
 }
+
+/** Night-only lights for drawRestroom. Split out so the baked sprite
+ *  (render/atlas.ts) can blit the day structure and still add these on
+ *  top -- main.ts tints the scene at night, but emissive detail has to be
+ *  drawn, not dimmed. drawRestroom() still calls it, so the vector fallback
+ *  is unchanged. */
+export function drawRestroomNight(ctx: CanvasRenderingContext2D, cx: number, cy: number): void {
+  const gy = cy - 4;
+  ctx.fillStyle = '#4ade80';
+  ctx.shadowBlur = 8;
+  ctx.shadowColor = '#22c55e';
+  ctx.beginPath();
+  ctx.arc(cx, gy - 30, 1.2, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.shadowBlur = 0;
+  }

@@ -17,3 +17,12 @@ blob-report/
 .wrangler/
 .dev.vars
 .dev.vars.*
+
+# Blender writes a .blend1 backup of the previous save; these files are
+# regenerated from the .py wholesale, so a backup of the last regeneration
+# is noise.
+scripts/blender/blend/*.blend1
+
+# Blender/Python bytecode
+__pycache__/
+*.pyc
