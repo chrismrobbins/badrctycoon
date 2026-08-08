@@ -93,14 +93,19 @@ async function fetchSlotMeta(userId: string, slot: number): Promise<SlotMeta | n
 
 /** Just enough of the current row for validation checks 8/9 -- null for a
  *  slot that doesn't exist yet, which those checks treat as "nothing to be
- *  monotonic against." */
-async function fetchStoredSlot(userId: string, slot: number): Promise<StoredSlot | null> {
-  const { rows } = await pool.query<{ day: number; playtime_ms: string | number }>(
-    `SELECT day, playtime_ms FROM save_slots WHERE user_id = $1 AND slot = $2`,
+ *  monotonic against." Includes `revision` even though checks 8/9 don't use
+ *  it directly -- saveSlot() does, to decide whether those checks should run
+ *  at all (see its comment). */
+async function fetchStoredSlot(
+  userId: string,
+  slot: number,
+): Promise<(StoredSlot & { revision: number }) | null> {
+  const { rows } = await pool.query<{ day: number; playtime_ms: string | number; revision: number }>(
+    `SELECT day, playtime_ms, revision FROM save_slots WHERE user_id = $1 AND slot = $2`,
     [userId, slot],
   );
   const row = rows[0];
-  return row ? { day: row.day, playtimeMs: Number(row.playtime_ms) } : null;
+  return row ? { day: row.day, playtimeMs: Number(row.playtime_ms), revision: row.revision } : null;
 }
 
 interface PutBody {
@@ -140,8 +145,19 @@ async function saveSlot(userId: string, slot: number, body: PutBody): Promise<Sl
   // database" -- stored is read-only context for checks 8/9 (monotonic day
   // and playtime), not a write, and the actual write is still gated by the
   // CAS below regardless of what stored held at read time.
+  //
+  // If the client is already stale on revision, `stored` reflects a save it
+  // never saw (someone else's), so its own day/playtime can look like time
+  // travel purely as an artifact of comparing against the wrong baseline --
+  // caught by tests/ui-auth.spec.ts's two-device test, which produced a
+  // genuine 422 here for a client that should have gotten the more useful
+  // 409 instead. The real problem in that case is the stale revision, which
+  // the CAS below already reports correctly; checks 8/9 have nothing
+  // meaningful to say about a row the client hasn't seen yet, so they're
+  // skipped rather than racing the CAS to describe the same conflict worse.
   const stored = await fetchStoredSlot(userId, slot);
-  const { state, parkName } = validateSave(body.state, body.parkName, body.playtimeMs, stored);
+  const isStale = stored !== null && body.baseRevision !== stored.revision;
+  const { state, parkName } = validateSave(body.state, body.parkName, body.playtimeMs, isStale ? null : stored);
 
   const summary = summarize(state);
   const params = [

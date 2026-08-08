@@ -71,6 +71,7 @@
         </div>
         <div class="hidden md:flex items-center gap-1 border-l border-slate-300 dark:border-gray-700 pl-4">
             <button data-act="openMgmt" data-arg="finance" class="h-8 px-3 rounded-lg text-[11px] font-bold text-slate-600 dark:text-gray-300 hover:bg-black/5 dark:hover:bg-white/10 transition" title="Management (M)"><i class="fas fa-briefcase mr-1"></i>Manage</button>
+            <button data-act="openAccount" class="h-8 px-3 rounded-lg text-[11px] font-bold text-slate-600 dark:text-gray-300 hover:bg-black/5 dark:hover:bg-white/10 transition" title="Account &amp; cloud saves"><i class="fas fa-user-circle mr-1"></i>Account</button>
             <button id="btn-minimap" data-act="toggleMinimap" class="w-8 h-8 rounded-lg text-xs text-slate-500 dark:text-gray-400 hover:bg-black/5 dark:hover:bg-white/10 transition" title="Minimap"><i class="fas fa-map"></i></button>
             <button id="btn-sound" data-act="toggleSound" class="w-8 h-8 rounded-lg text-xs text-slate-500 dark:text-gray-400 hover:bg-black/5 dark:hover:bg-white/10 transition" title="Sound"><i class="fas fa-volume-mute"></i></button>
             <button data-act="undoLast" class="w-8 h-8 rounded-lg text-xs text-slate-500 dark:text-gray-400 hover:bg-black/5 dark:hover:bg-white/10 transition" title="Undo (Ctrl+Z)"><i class="fas fa-rotate-left"></i></button>
@@ -193,6 +194,12 @@
             </div>
         </div>
     </div>
+
+    <!-- ═══ Account panel — login/register, slot picker, conflict dialog ═══
+         Mounted and fully owned by ui/auth.ts; main.ts only opens/closes it
+         and hands it four callbacks. Reuses the .mgmt-*/.m-btn classes above
+         rather than adding new CSS -- see the note in styles/app.css. -->
+    <div id="account" class="hidden"></div>
 
     <script type="module" src="/src/main.ts"></script>
 </body>

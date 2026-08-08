@@ -101,6 +101,20 @@ h1, h2, h3 { font-family: 'Space Grotesk', sans-serif; }
 .mgmt-close { background: none; border: 0; cursor: pointer; color: #94a3b8; font-size: 1.1rem; }
 .mgmt-close:hover { color: #0f172a; }
 :where(.dark, .dark *) .mgmt-close:hover { color: #ffffff; }
+
+/* Account panel (ui/auth.ts) reuses .mgmt-backdrop/.mgmt-center/.mgmt-panel/
+   .mgmt-head/.mgmt-title -- same look, genuinely the same kind of overlay.
+   Its own close button is a separate class, not .mgmt-close: several
+   Playwright specs target `.mgmt-close` unscoped (one modal on the page at a
+   time was a safe assumption before this one existed), and a second element
+   with that class would make those locators ambiguous. #account needs the
+   same fixed-overlay treatment #mgmt gets above, since unlike #mgmt it has
+   no other rule establishing it. */
+#account { position: fixed; inset: 0; z-index: 90; }
+#account.hidden { display: none; }
+.acct-close { background: none; border: 0; cursor: pointer; color: #94a3b8; font-size: 1.1rem; }
+.acct-close:hover { color: #0f172a; }
+:where(.dark, .dark *) .acct-close:hover { color: #ffffff; }
 .mgmt-tabs {
     display: flex; gap: 0.25rem; padding: 1rem 1.5rem 0;
     border-bottom: 1px solid rgba(0,0,0,0.07); overflow-x: auto;

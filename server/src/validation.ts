@@ -50,8 +50,13 @@ export interface ValidatedSave {
 }
 
 /**
- * `stored` is the slot's current day/playtimeMs, or null for a slot that
- * doesn't exist yet (checks 8 and 9 have nothing to be monotonic against).
+ * `stored` is the slot's current day/playtimeMs, or null when there's
+ * nothing for checks 8 and 9 to be meaningfully monotonic against -- either
+ * the slot doesn't exist yet, or (routes/slots.ts passes null deliberately
+ * for this case too) the caller is already stale on revision, so `stored`
+ * reflects a save this client never saw and comparing against it would
+ * produce a confusing 422 for what is really just the revision conflict the
+ * CAS is about to report anyway.
  */
 export function validateSave(
   rawState: unknown,
