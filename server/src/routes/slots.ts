@@ -22,7 +22,7 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { pool } from '../db';
 import { apiError } from '../errors';
-import { requireUser } from '../auth/session';
+import { requireUser, getSessionUser } from '../auth/session';
 import { summarize, type GameState } from '../shared';
 import { validateSave, type StoredSlot } from '../validation';
 
@@ -110,6 +110,118 @@ interface PutBody {
   state?: unknown;
 }
 
+/**
+ * The full save path: validate, CAS in SQL, archive to save_history, and
+ * upsert a personal best into `scores`. Shared by PUT (errors propagate to
+ * the caller as the documented 4xx/409/422) and the beacon alias (errors are
+ * swallowed -- see slotRoutes' beacon handler and API-CONTRACT.md §3: "a 409
+ * here would be shouting into a closed tab").
+ *
+ * `scores` is upserted here rather than as a separate submission endpoint by
+ * design -- API-CONTRACT.md §3: "There is deliberately no score-submission
+ * endpoint. Scores are derived server-side from a validated save on PUT."
+ * `guests_peak` has no dedicated field on GameState; it falls out for free
+ * from upserting `state.guests` only when it beats the stored value -- the
+ * "peak" is a property of the score row's history, not something the client
+ * tracks itself.
+ */
+async function saveSlot(userId: string, slot: number, body: PutBody): Promise<SlotMeta> {
+  if (typeof body.parkName !== 'string') {
+    throw apiError(400, 'invalid_park_name', 'parkName is required.');
+  }
+  if (typeof body.playtimeMs !== 'number' || !Number.isFinite(body.playtimeMs) || body.playtimeMs < 0) {
+    throw apiError(400, 'invalid_playtime', 'playtimeMs must be a non-negative number.');
+  }
+  if (typeof body.baseRevision !== 'number' || !Number.isInteger(body.baseRevision) || body.baseRevision < 0) {
+    throw apiError(400, 'invalid_base_revision', 'baseRevision must be a non-negative integer.');
+  }
+
+  // The 11-point table (API-CONTRACT.md §6), run "before touching the
+  // database" -- stored is read-only context for checks 8/9 (monotonic day
+  // and playtime), not a write, and the actual write is still gated by the
+  // CAS below regardless of what stored held at read time.
+  const stored = await fetchStoredSlot(userId, slot);
+  const { state, parkName } = validateSave(body.state, body.parkName, body.playtimeMs, stored);
+
+  const summary = summarize(state);
+  const params = [
+    userId,
+    slot,
+    parkName,
+    summary.saveVersion,
+    summary.day,
+    summary.funds,
+    summary.parkValue,
+    summary.rating,
+    summary.guests,
+    body.playtimeMs,
+  ] as const;
+
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+
+    const row = await (body.baseRevision === 0
+      ? createSlot(client, params)
+      : updateSlot(client, params, body.baseRevision));
+
+    if (!row) {
+      // 0 rows: either the slot already exists (baseRevision 0 meant "new")
+      // or someone else's write landed first (baseRevision > 0, stale).
+      // Either way it is the same shape of conflict from the client's point
+      // of view -- API-CONTRACT.md §5's 409-with-current-SlotMeta.
+      const current = await fetchSlotMeta(userId, slot);
+      throw apiError(409, 'revision_conflict', 'This park was saved elsewhere first.', current ?? undefined);
+    }
+
+    if (body.baseRevision === 0) {
+      await client.query(`INSERT INTO save_blobs (slot_id, state) VALUES ($1, $2)`, [row.id, state]);
+    } else {
+      // Archive what was there before overwriting it (contract §5).
+      const old = await client.query<{ state: GameState }>(
+        `SELECT state FROM save_blobs WHERE slot_id = $1`,
+        [row.id],
+      );
+      if (old.rows[0]) {
+        await client.query(
+          `INSERT INTO save_history (slot_id, revision, state) VALUES ($1, $2, $3)`,
+          [row.id, row.revision - 1, old.rows[0].state],
+        );
+      }
+      await client.query(`UPDATE save_blobs SET state = $2 WHERE slot_id = $1`, [row.id, state]);
+    }
+
+    await upsertScore(client, userId, 'park_value', summary.parkValue, row.id);
+    await upsertScore(client, userId, 'guests_peak', state.guests, row.id);
+    await upsertScore(client, userId, 'day_reached', state.dayCount, row.id);
+
+    await client.query('COMMIT');
+    return toSlotMeta(row);
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+async function upsertScore(
+  client: import('pg').PoolClient,
+  userId: string,
+  metric: string,
+  value: number,
+  slotId: string,
+): Promise<void> {
+  await client.query(
+    `INSERT INTO scores (user_id, metric, value, slot_id, achieved_at)
+     VALUES ($1, $2, $3, $4, now())
+     ON CONFLICT (user_id, metric) DO UPDATE
+       SET value = EXCLUDED.value, slot_id = EXCLUDED.slot_id, achieved_at = now()
+     WHERE scores.value < EXCLUDED.value`,
+    [userId, metric, value, slotId],
+  );
+}
+
 export async function slotRoutes(app: FastifyInstance): Promise<void> {
   app.get('/api/slots', async (request) => {
     const user = await requireUser(request);
@@ -143,85 +255,31 @@ export async function slotRoutes(app: FastifyInstance): Promise<void> {
   app.put<{ Params: { slot: string }; Body: PutBody }>('/api/slots/:slot', async (request) => {
     const user = await requireUser(request);
     const slot = parseSlotParam(request);
-    const body = request.body ?? {};
-
-    if (typeof body.parkName !== 'string') {
-      throw apiError(400, 'invalid_park_name', 'parkName is required.');
-    }
-    if (typeof body.playtimeMs !== 'number' || !Number.isFinite(body.playtimeMs) || body.playtimeMs < 0) {
-      throw apiError(400, 'invalid_playtime', 'playtimeMs must be a non-negative number.');
-    }
-    if (typeof body.baseRevision !== 'number' || !Number.isInteger(body.baseRevision) || body.baseRevision < 0) {
-      throw apiError(400, 'invalid_base_revision', 'baseRevision must be a non-negative integer.');
-    }
-
-    // The 11-point table (API-CONTRACT.md §6), run "before touching the
-    // database" -- stored is read-only context for checks 8/9 (monotonic day
-    // and playtime), not a write, and the actual write is still gated by the
-    // CAS below regardless of what stored held at read time.
-    const stored = await fetchStoredSlot(user.id, slot);
-    const { state, parkName } = validateSave(body.state, body.parkName, body.playtimeMs, stored);
-
-    const summary = summarize(state);
-    const params = [
-      user.id,
-      slot,
-      parkName,
-      summary.saveVersion,
-      summary.day,
-      summary.funds,
-      summary.parkValue,
-      summary.rating,
-      summary.guests,
-      body.playtimeMs,
-    ] as const;
-
-    const client = await pool.connect();
-    try {
-      await client.query('BEGIN');
-
-      const row = await (body.baseRevision === 0
-        ? createSlot(client, params)
-        : updateSlot(client, params, body.baseRevision));
-
-      if (!row) {
-        // 0 rows: either the slot already exists (baseRevision 0 meant "new")
-        // or someone else's write landed first (baseRevision > 0, stale).
-        // Either way it is the same shape of conflict from the client's
-        // point of view -- API-CONTRACT.md §5's 409-with-current-SlotMeta.
-        const current = await fetchSlotMeta(user.id, slot);
-        throw apiError(409, 'revision_conflict', 'This park was saved elsewhere first.', current ?? undefined);
-      }
-
-      if (body.baseRevision === 0) {
-        await client.query(`INSERT INTO save_blobs (slot_id, state) VALUES ($1, $2)`, [
-          row.id,
-          state,
-        ]);
-      } else {
-        // Archive what was there before overwriting it (contract §5).
-        const old = await client.query<{ state: GameState }>(
-          `SELECT state FROM save_blobs WHERE slot_id = $1`,
-          [row.id],
-        );
-        if (old.rows[0]) {
-          await client.query(
-            `INSERT INTO save_history (slot_id, revision, state) VALUES ($1, $2, $3)`,
-            [row.id, row.revision - 1, old.rows[0].state],
-          );
-        }
-        await client.query(`UPDATE save_blobs SET state = $2 WHERE slot_id = $1`, [row.id, state]);
-      }
-
-      await client.query('COMMIT');
-      return { meta: toSlotMeta(row) };
-    } catch (err) {
-      await client.query('ROLLBACK').catch(() => {});
-      throw err;
-    } finally {
-      client.release();
-    }
+    const meta = await saveSlot(user.id, slot, request.body ?? {});
+    return { meta };
   });
+
+  // Alias for PUT, same body, for navigator.sendBeacon() on tab-hide
+  // (contract §3). The page is usually gone before a response lands, so this
+  // answers 204 unconditionally -- including when validation fails or the
+  // revision conflicts. Either way the save simply doesn't happen; the client
+  // discovers that (if it's still around) on its next real PUT. Returning an
+  // error here would be shouting into a closed tab.
+  app.post<{ Params: { slot: string }; Body: PutBody }>(
+    '/api/slots/:slot/beacon',
+    async (request, reply) => {
+      const user = await getSessionUser(request);
+      if (user) {
+        const slot = Number(request.params.slot);
+        if (Number.isInteger(slot) && slot >= SLOT_MIN && slot <= SLOT_MAX) {
+          await saveSlot(user.id, slot, request.body ?? {}).catch((err) => {
+            request.log.info({ err }, 'beacon save did not apply');
+          });
+        }
+      }
+      reply.code(204);
+    },
+  );
 
   app.delete<{ Params: { slot: string } }>('/api/slots/:slot', async (request, reply) => {
     const user = await requireUser(request);
