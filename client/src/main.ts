@@ -54,6 +54,11 @@ import {
     drawBreakdownSmoke as drawBreakdownSmokeImpl, drawRainFX as drawRainFXImpl,
     drawTooltip as drawTooltipImpl, drawRideQueue as drawRideQueueImpl,
 } from './render/effects';
+import { drawStaffOne as drawStaffOneImpl, drawLitterAt as drawLitterAtImpl } from './render/entities';
+import {
+    FIREWORK_COLORS, updateFireworks as updateFireworksImpl, drawFireworks as drawFireworksImpl,
+    hasActiveFireworks as hasActiveFireworksImpl,
+} from './render/fireworks';
 import { createApi } from './net/client';
 import { mountAuthUI } from './ui/auth';
 import { getPlaytimeMs, startPlaytimeTracking, ensureAtLeast as ensurePlaytimeAtLeast } from './save/playtime';
@@ -154,12 +159,13 @@ let lastFrameAt = 0;
 // Land expansion
 const LAND_COSTS = [5000, 12000, 25000, 45000, 80000];
 
-// Fireworks
-let fireworkParticles = [];
-let fireworkShells = [];
+// Fireworks -- the particle system itself (FireworkShell/FireworkParticle,
+// FIREWORK_COLORS, updateFireworks/drawFireworks) moved to
+// render/fireworks.ts (phase 4). fireworksActive/fireworksTimer stay here:
+// they're set from evaluateAwards/checkObjectives/economyTick, none of
+// which have moved.
 let fireworksActive = false;
 let fireworksTimer = 0;           // ticks remaining in the show
-const FIREWORK_COLORS = ['#ef4444','#3b82f6','#eab308','#ec4899','#8b5cf6','#10b981','#f97316','#06b6d4','#f43f5e','#a3e635'];
 
 
 
@@ -242,71 +248,9 @@ function fireStaff(kind) {
 }
 
 // Drawn per-worker so staff can join the scene's depth sort
-function drawStaffOne(w) {
-    const k = STAFF_KINDS[w.kind];
-    const mx = w.x + (w.tx - w.x) * w.progress;
-    const my = w.y + (w.ty - w.y) * w.progress;
-    const p = toScreen(mx, my);
-    const bob = Math.sin(w.progress * Math.PI) * 3;
-    const yy = p.y - 5 - bob;
-    // Shadow
-    ctx.fillStyle = 'rgba(0,0,0,0.2)';
-    ctx.beginPath(); ctx.ellipse(p.x, p.y, 3.5, 1.6, 0, 0, Math.PI * 2); ctx.fill();
-    // Uniform body + head + cap
-    ctx.fillStyle = k.color;
-    ctx.beginPath(); ctx.roundRect(p.x - 2.6, yy - 3, 5.2, 6.5, 2); ctx.fill();
-    ctx.fillStyle = '#fcd9b6';
-    ctx.beginPath(); ctx.arc(p.x, yy - 5, 2.3, 0, Math.PI * 2); ctx.fill();
-    ctx.fillStyle = k.color;
-    ctx.beginPath(); ctx.roundRect(p.x - 2.6, yy - 7.6, 5.2, 2.2, 1); ctx.fill();
-    // Tool of the trade
-    ctx.strokeStyle = '#78716c'; ctx.lineWidth = 1;
-    if (w.kind === 'janitor') {
-        const sw = Math.sin(simClock * 0.008 + w.swing) * 2;
-        ctx.beginPath(); ctx.moveTo(p.x + 2, yy - 2); ctx.lineTo(p.x + 5 + sw, yy + 4); ctx.stroke();
-        ctx.fillStyle = '#eab308';
-        ctx.fillRect(p.x + 4 + sw, yy + 3.5, 3, 1.6);
-    } else if (w.kind === 'mechanic') {
-        ctx.beginPath(); ctx.moveTo(p.x + 2.5, yy - 1); ctx.lineTo(p.x + 5, yy - 4); ctx.stroke();
-        ctx.fillStyle = '#cbd5e1';
-        ctx.beginPath(); ctx.arc(p.x + 5.4, yy - 4.4, 1.3, 0, Math.PI * 2); ctx.fill();
-    } else {
-        // Entertainer holds a balloon and sparkles
-        ctx.strokeStyle = 'rgba(203,213,225,0.6)';
-        ctx.beginPath(); ctx.moveTo(p.x + 2.5, yy - 2); ctx.lineTo(p.x + 5, yy - 9); ctx.stroke();
-        ctx.fillStyle = '#f472b6';
-        ctx.beginPath(); ctx.arc(p.x + 5.2, yy - 11, 2.4, 0, Math.PI * 2); ctx.fill();
-        if (Math.sin(simClock * 0.006 + w.swing) > 0.7) {
-            ctx.fillStyle = '#fde047';
-            ctx.beginPath(); ctx.arc(p.x - 4, yy - 8, 1, 0, Math.PI * 2); ctx.fill();
-        }
-    }
-}
-
-// ── Litter rendering ──
-function drawLitterAt(x, y, sx, sy) {
-    const n = litterAt(S, x, y);
-    if (!n) return;
-    for (let i = 0; i < n * 2; i++) {
-        const h = tileHash(sx + i * 31, sy - i * 17);
-        const ox = (h - 0.5) * TILE_W * 0.7;
-        const oy = (tileHash(sx - i * 13, sy + i * 29) - 0.5) * TILE_H * 0.7;
-        const kind = Math.floor(h * 3);
-        if (kind === 0) {           // crumpled cup
-            ctx.fillStyle = '#e2e8f0';
-            ctx.beginPath(); ctx.ellipse(sx + ox, sy + oy, 2.2, 1.4, h * 3, 0, Math.PI * 2); ctx.fill();
-        } else if (kind === 1) {    // wrapper
-            ctx.fillStyle = '#fca5a5';
-            ctx.beginPath();
-            ctx.moveTo(sx + ox - 2, sy + oy); ctx.lineTo(sx + ox, sy + oy - 1.6);
-            ctx.lineTo(sx + ox + 2, sy + oy); ctx.lineTo(sx + ox, sy + oy + 1.2);
-            ctx.closePath(); ctx.fill();
-        } else {                    // squashed can
-            ctx.fillStyle = '#94a3b8';
-            ctx.fillRect(sx + ox - 1.6, sy + oy - 1, 3.2, 2);
-        }
-    }
-}
+// drawStaffOne/drawLitterAt moved to render/entities.ts (phase 4).
+function drawStaffOne(w) { drawStaffOneImpl(ctx, w); }
+function drawLitterAt(x, y, sx, sy) { drawLitterAtImpl(ctx, S, x, y, sx, sy); }
 
 // ── Awards ──
 // Predicates, AWARD_DEFS and evaluateAwards() itself now live in sim/awards.ts
@@ -973,129 +917,10 @@ function drawTooltip() { drawTooltipImpl(ctx, S, canvas, hoveredCell, mouseX, mo
 function drawRideQueue(ax, ay, queueCount, sz) { drawRideQueueImpl(ctx, ax, ay, queueCount, sz); }
 
 // ────── Fireworks System ──────
-
-class FireworkShell {
-    x: number; y: number; targetY: number;
-    speed: number; color: string;
-    trail: { x: number; y: number; alpha: number }[];
-    alive: boolean;
-
-    constructor() {
-        this.x = canvas.width * 0.2 + Math.random() * canvas.width * 0.6;
-        this.y = canvas.height;
-        this.targetY = canvas.height * 0.1 + Math.random() * canvas.height * 0.3;
-        this.speed = 3 + Math.random() * 3;
-        this.color = FIREWORK_COLORS[Math.floor(Math.random() * FIREWORK_COLORS.length)];
-        this.trail = [];
-        this.alive = true;
-    }
-    update() {
-        this.trail.push({ x: this.x, y: this.y, alpha: 1 });
-        if (this.trail.length > 8) this.trail.shift();
-        this.trail.forEach(t => t.alpha *= 0.85);
-        this.y -= this.speed;
-        if (this.y <= this.targetY) {
-            this.alive = false;
-            this.explode();
-        }
-    }
-    explode() {
-        const count = 40 + Math.floor(Math.random() * 40);
-        const style = Math.floor(Math.random() * 3); // 0=circle, 1=ring, 2=star
-        const color2 = FIREWORK_COLORS[Math.floor(Math.random() * FIREWORK_COLORS.length)];
-        for (let i = 0; i < count; i++) {
-            const angle = (i / count) * Math.PI * 2;
-            let speed = 1 + Math.random() * 3;
-            if (style === 1) speed = 2.5 + Math.random() * 0.5;           // ring: uniform speed
-            if (style === 2) speed = (i % 5 === 0) ? 4 : 1.5 + Math.random(); // star: long points
-            const c = (i % 3 === 0) ? color2 : this.color;
-            fireworkParticles.push(new FireworkParticle(this.x, this.y, angle, speed, c));
-        }
-    }
-    draw() {
-        // Trail
-        for (let t of this.trail) {
-            ctx.beginPath();
-            ctx.arc(t.x, t.y, 2, 0, Math.PI * 2);
-            ctx.fillStyle = `rgba(254, 240, 138, ${t.alpha})`;
-            ctx.fill();
-        }
-        // Shell head
-        ctx.beginPath();
-        ctx.arc(this.x, this.y, 3, 0, Math.PI * 2);
-        ctx.fillStyle = '#fef08a';
-        ctx.shadowBlur = 8;
-        ctx.shadowColor = '#fef08a';
-        ctx.fill();
-        ctx.shadowBlur = 0;
-    }
-}
-
-class FireworkParticle {
-    x: number; y: number;
-    vx: number; vy: number;
-    color: string;
-    alpha: number; decay: number; gravity: number;
-    size: number; sparkle: boolean;
-
-    constructor(x, y, angle, speed, color) {
-        this.x = x;
-        this.y = y;
-        this.vx = Math.cos(angle) * speed;
-        this.vy = Math.sin(angle) * speed;
-        this.color = color;
-        this.alpha = 1;
-        this.decay = 0.012 + Math.random() * 0.015;
-        this.gravity = 0.03;
-        this.size = 1.5 + Math.random() * 1.5;
-        this.sparkle = Math.random() > 0.7;  // some particles twinkle
-    }
-    update() {
-        this.x += this.vx;
-        this.y += this.vy;
-        this.vy += this.gravity;
-        this.vx *= 0.98;
-        this.vy *= 0.98;
-        this.alpha -= this.decay;
-    }
-    draw() {
-        if (this.alpha <= 0) return;
-        const flickr = this.sparkle ? (0.5 + Math.sin(simClock * 0.02 + this.x) * 0.5) : 1;
-        ctx.beginPath();
-        ctx.arc(this.x, this.y, this.size * this.alpha, 0, Math.PI * 2);
-        ctx.fillStyle = this.color;
-        ctx.globalAlpha = this.alpha * flickr;
-        ctx.shadowBlur = 6;
-        ctx.shadowColor = this.color;
-        ctx.fill();
-        ctx.shadowBlur = 0;
-        ctx.globalAlpha = 1;
-    }
-}
-
-function updateFireworks() {
-    // Launch new shells periodically during the show
-    if (fireworksActive && Math.random() < 0.12) {
-        fireworkShells.push(new FireworkShell());
-    }
-
-    // Update shells
-    for (let i = fireworkShells.length - 1; i >= 0; i--) {
-        fireworkShells[i].update();
-        if (!fireworkShells[i].alive) fireworkShells.splice(i, 1);
-    }
-
-    // Update particles
-    for (let i = fireworkParticles.length - 1; i >= 0; i--) {
-        fireworkParticles[i].update();
-        if (fireworkParticles[i].alpha <= 0) fireworkParticles.splice(i, 1);
-    }
-}
-
-function drawFireworks() {
-    for (let s of fireworkShells) s.draw();
-    for (let p of fireworkParticles) p.draw();
-}
+// FireworkShell/FireworkParticle and updateFireworks/drawFireworks moved to
+// render/fireworks.ts (phase 4); wrappers below keep the zero-arg signatures.
+function updateFireworks() { updateFireworksImpl(fireworksActive, canvas); }
+function drawFireworks() { drawFireworksImpl(ctx); }
 
 // ────── Sprite table ──────
 // id -> how to draw it. Replaces the two `else if (cell === '...')` chains the
@@ -1406,7 +1231,7 @@ function render() {
     drawRainFX();
 
     // Fireworks advance in simTick(); render only paints them.
-    if (fireworkShells.length > 0 || fireworkParticles.length > 0) {
+    if (hasActiveFireworksImpl()) {
         drawFireworks();
     }
 
