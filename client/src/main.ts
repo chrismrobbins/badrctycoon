@@ -11,10 +11,13 @@ import {
     pathTiles, staffCount, dailyWages, bfsRoute, stepRoute, wanderStep, updateStaff,
     hireStaff as hireStaffSim, fireStaff as fireStaffSim,
 } from './sim/staff';
-import { OBJECTIVES, checkObjectives as checkObjectivesSim } from './sim/objectives';
+import { checkObjectives as checkObjectivesSim } from './sim/objectives';
 import { processRideQueues as processRideQueuesSim } from './sim/rides';
 import { createGuest, updateGuest as updateGuestSim } from './sim/guests';
 import { perceivedValue as perceivedValueSim, economyTick as economyTickSim, DAILY_INTEREST } from './sim/economy';
+import { logEvent } from './ui/eventlog';
+import { updateStatusBar as updateStatusBarSim } from './ui/statusbar';
+import { renderObjectives as renderObjectivesSim } from './ui/objectives';
 import { createApi } from './net/client';
 import { mountAuthUI } from './ui/auth';
 import { getPlaytimeMs, startPlaytimeTracking, ensureAtLeast as ensurePlaytimeAtLeast } from './save/playtime';
@@ -884,18 +887,9 @@ function minimapJump(e) {
 // OBJECTIVES data and the pure ladder-advance logic moved to
 // sim/objectives.ts (phase 4); checkObjectives() below is a thin wrapper for
 // the event-log/fireworks/save side effects that belong to ui/render.
+// Moved to ui/objectives.ts (phase 4); wrapper keeps the zero-arg signature.
 function renderObjectives() {
-    const list = document.getElementById('objective-list');
-    if (!list) return;
-    list.innerHTML = '';
-    OBJECTIVES.forEach((o, i) => {
-        const row = document.createElement('div');
-        const done = i < S.objectiveIndex;
-        const current = i === S.objectiveIndex;
-        row.className = 'flex items-start gap-2 text-[11px] ' + (done ? 'text-green-500' : current ? 'text-slate-800 dark:text-white font-bold' : 'text-slate-400 dark:text-gray-600');
-        row.innerHTML = `<i class="fas ${done ? 'fa-check-circle' : current ? 'fa-bullseye' : 'fa-lock'} mt-0.5 text-[10px]"></i><span>${o.text} <span class="text-green-600 dark:text-green-400 font-normal">+$${o.reward.toLocaleString()}</span></span>`;
-        list.appendChild(row);
-    });
+    renderObjectivesSim(S);
 }
 
 function checkObjectives() {
@@ -1083,70 +1077,13 @@ function setTool(tool, btnElement) {
     }
 }
 
-function formatTime(h) {
-    const hh = Math.floor(h) % 24;
-    const mm = Math.floor((h % 1) * 60);
-    const ampm = hh >= 12 ? 'PM' : 'AM';
-    const h12 = hh === 0 ? 12 : hh > 12 ? hh - 12 : hh;
-    return `${h12}:${mm.toString().padStart(2, '0')} ${ampm}`;
-}
-
+// formatTime/updateUI/logEvent moved to ui/statusbar.ts and ui/eventlog.ts
+// (phase 4). updateUI() keeps its name and zero-arg signature so the ~10
+// call sites below don't need touching; it only needs a wrapper because it
+// has to keep main.ts's own `isNight` (read by draw functions still here)
+// in sync with what ui/statusbar.ts computes.
 function updateUI() {
-    document.getElementById('stat-funds').innerText = `$${S.funds.toLocaleString()}`;
-    document.getElementById('stat-guests').innerText = String(S.guests);
-    document.getElementById('stat-rating').innerText = String(parkRating(S));
-    document.getElementById('stat-happiness').innerText = `${Math.round(S.parkHappiness)}%`;
-    document.getElementById('stat-time').innerText = formatTime(S.gameTime);
-    const dayEl = document.getElementById('stat-day');
-    if (dayEl) dayEl.innerText = `Day ${S.dayCount}`;
-    const clnEl = document.getElementById('stat-clean');
-    if (clnEl) {
-        clnEl.innerText = `${Math.round(S.cleanliness)}%`;
-        clnEl.style.color = S.cleanliness > 80 ? '#14b8a6' : S.cleanliness > 50 ? '#f59e0b' : '#ef4444';
-    }
-    const valEl = document.getElementById('stat-value');
-    if (valEl) valEl.innerText = `$${parkValue(S).toLocaleString()}`;
-    const wEl = document.getElementById('stat-weather');
-    if (wEl) wEl.innerHTML = S.weather === 'clear'
-        ? '<i class="fas fa-sun text-yellow-500"></i>'
-        : S.weather === 'cloudy'
-            ? '<i class="fas fa-cloud text-gray-400"></i>'
-            : '<i class="fas fa-cloud-rain text-blue-400"></i>';
-
-    const happEl = document.getElementById('stat-happiness');
-    if (S.parkHappiness >= 75) { happEl.classList.add('happy-high'); } else { happEl.classList.remove('happy-high'); }
-
-    const statusEl = document.getElementById('stat-status');
-    if (S.isParkOpen) {
-        statusEl.innerText = "OPEN";
-        statusEl.classList.replace('text-red-500', 'text-green-500');
-    } else {
-        statusEl.innerText = "CLOSED";
-        statusEl.classList.replace('text-green-500', 'text-red-500');
-    }
-
-    // Day/Night cycle — compute darkness level (used by canvas renderer)
-    const hour = S.gameTime % 24;
-    let nightAlpha = 0;
-    if (hour >= 20 || hour < 5) {
-        nightAlpha = 0.55;
-    } else if (hour >= 18) {
-        nightAlpha = ((hour - 18) / 2) * 0.55;
-    } else if (hour < 7) {
-        nightAlpha = ((7 - hour) / 2) * 0.55;
-    }
-    isNight = isNightAt(S.gameTime);
-    // Store for render loop
-    window._nightAlpha = nightAlpha;
-}
-
-function logEvent(msg, type='info') {
-    const log = document.getElementById('event-log');
-    const div = document.createElement('div');
-    div.className = `text-[10px] mb-1 ${type === 'good' ? 'text-green-500 font-bold' : type === 'bad' ? 'text-red-500 font-bold' : 'text-slate-600 dark:text-gray-400'}`;
-    div.innerText = msg;
-    log.appendChild(div);
-    log.scrollTop = log.scrollHeight;
+    isNight = updateStatusBarSim(S);
 }
 
 // ────── Guest Entity Class ──────
