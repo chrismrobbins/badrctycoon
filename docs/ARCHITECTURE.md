@@ -430,9 +430,9 @@ Each phase ships independently and is revertable. No big-bang rewrite.
 | **1** ✅ | Split the file. Marketing chrome out; `<script>` → `client/src/main.ts` as one module; 50 inline `onclick=` handlers → delegated `data-act` dispatch. **No game-logic changes.** | Game runs standalone |
 | **2** ✅ | `core/state.ts`. All persisted globals into one object; 430 references rewritten from compiler positions. | Save/load is `JSON.stringify(S)` |
 | **3** ✅ | Content registry (§4.1). Nine tables + two dispatch chains + the palette markup collapsed. | Adding a ride = 1 file + 1 sprite |
-| **4** ◐ | `sim/finance.ts` extracted and the ledger bypass fixed (§3.3). **The rest of the split is not done** — see below. | Ledger reconciles |
+| **4** ✅ | Full split: `sim/` (finance, park, litter, staff, guests, rides, economy, objectives, awards, scenery, time), `ui/` (eventlog, statusbar, objectives, management, inspectors, palette, auth), `render/` (camera, iso, clock, sprites/<id>.ts for every attraction, effects, entities, fireworks, minimap). `main.ts`: 4,718 → ~1,560 lines. The `no-restricted-imports`/`no-restricted-globals` boundary rule on `sim/` shipped as `scripts/check-sim-boundary.mjs` instead of real ESLint -- typescript-eslint hard-refuses to run on TypeScript 7 (tracked at their issue #10940); see that script's header for the full story. `render()`, `handleInteraction`, and `buildInCell` stay in `main.ts` deliberately -- they're the composition root wiring the extracted pieces together, per §4.2's own target layout, not code still tangled. | Adding a ride is one file plus one sprite; `sim/` imports clean in Node with no DOM |
 | **5** ✅ | Fixed-timestep loop. Fixes §2.3, §2.5, §3.2. Seeded RNG deliberately deferred. | Frame-rate independence, pause works |
-| **6** ◐ | Migration chain that never rejects landed early, with phase 2. §3.6 (litter leak, redundant `anchorOf`) still open. | Saves survive version bumps |
+| **6** ◐ | Migration chain that never rejects landed early, with phase 2. §3.6: the litter leak (bulldozing never deleted a path's `litter` entry) is fixed. Redundant `anchorOf` persistence is still open -- deliberately deferred past phase 4 despite being derivable from `map` + content, because removing it from `GameState` (matching the `rating`/`builtValue` precedent in §3.5) means updating ~15+ read sites across `sim/staff.ts`, `sim/rides.ts`, `sim/guests.ts`, and `main.ts`, not just the save boundary. | Saves survive version bumps |
 | **7** | Postgres + API. Auth, slots, sync, conflict UI. See [API-CONTRACT.md](API-CONTRACT.md). | Cloud saves |
 | **8** | Leaderboards, achievements, multi-park slot picker. | Platform |
 
@@ -478,36 +478,69 @@ Phase 2 is where that file starts to shrink.
 
 ```
 client/src/core/state.ts        GameState + createGameState()
-client/src/content/             define, needs, scenery, shops, rides, index
+client/src/content/             define, needs, scenery, shops, rides, staff, marketing, index
 client/src/save/                schema.ts, migrations.ts
-client/src/sim/finance.ts       the only writer of state.funds
-client/src/main.ts              still ~4,400 lines: render, UI, guests, staff, economy
-tests/                          40 tests across 6 files, all passing
+client/src/sim/                 finance, park, litter, staff, guests, rides, economy,
+                                 objectives, awards, scenery, time -- headless, no DOM
+client/src/ui/                  eventlog, statusbar, objectives, management, inspectors,
+                                 palette, auth
+client/src/render/              camera, iso, clock, effects, entities, fireworks, minimap,
+                                 sprites/ (one file per attraction category + the SPRITES table)
+client/src/main.ts              ~1,560 lines: the composition root -- render()'s per-frame
+                                 orchestration, handleInteraction/buildInCell, boot sequence
+scripts/check-sim-boundary.mjs  the sim/ headlessness check (see below for why not ESLint)
+tests/                          61 tests across the suite (55 pass locally; 6 more pass too
+                                 with `npm run worker:dev` running)
 ```
 
-**Phase 4 is the one that is materially incomplete.** `sim/finance.ts` came out because the
-ledger bug needed a structural home, but `render/`, `ui/`, and the rest of `sim/` are still
-inside `main.ts`. What is left:
+**Phase 4 is done.** `sim/`, `ui/`, and `render/` are all split out. What actually happened,
+in order, differs a little from the plan above:
 
-- Extract `sim/` — `guests.ts`, `staff.ts`, `rides.ts`, `economy.ts`, `litter.ts`,
-  `research.ts`, `marketing.ts`, `awards.ts`, `objectives.ts`. Guest and the staff walker are
-  the big ones; both close over module state today.
-- Extract `render/` — `renderer.ts`, `camera.ts`, `iso.ts`, `weather.ts`, `fireworks.ts`,
-  `minimap.ts`, and `sprites/<id>.ts`. The blocker is that the ~36 draw functions close over
-  a module-level `ctx`; they need it passed in before they can move.
-- Extract `ui/` — palette, statusbar, management tabs, inspectors, event log. This is where
-  the `data-act` dispatch table gets replaced by per-module listeners, and where the ~500
-  lines of hand-rolled CSS should be deleted in favour of Tailwind utilities (§4.5).
-- Add the ESLint `no-restricted-imports` / `no-restricted-globals` boundary rule on `sim/`.
-  Until that exists, nothing stops the simulation reaching for the DOM again;
-  `tests/portability.spec.ts` is the interim guard for the modules the server needs.
+- `sim/` came out first, in the order guests/staff (the two the plan called out as the big
+  ones, both closing over module state) followed by the rest -- litter, rides, objectives,
+  economy (which absorbed research and marketing rather than getting separate files; they
+  were small enough to live inside `economy.ts`'s `runDailyBooks()`), awards.
+- `ui/` came out in dependency order: the fully self-contained pieces (eventlog, statusbar,
+  objectives) first, then management (the single biggest function in the file), then
+  inspectors and palette. `auth.ts` already existed from phase 7.
+- `render/` came out last, camera/iso/clock first (the shared primitives every sprite needs),
+  then every sprite file, then the smaller systems (effects, entities, fireworks, minimap).
+  The blocker the plan called out -- ~36 draw functions closing over a module-level `ctx` --
+  is gone: every one of them takes `ctx` explicitly now.
+- The ESLint `no-restricted-imports` / `no-restricted-globals` boundary rule on `sim/` did
+  **not** ship as ESLint. `typescript-eslint` (8.66.0, latest published) unconditionally
+  refuses to run against TypeScript 7 -- not a peer-dependency warning, a hard throw at
+  require-time (tracked at their issue #10940). The fallback -- skip typescript-eslint and
+  walk the AST with the `typescript` package's own compiler API -- doesn't work either: TS 7
+  restructured the package so `require('typescript')` exposes only `{ version,
+  versionMajorMinor }`; the classic API lives under explicitly-`unstable` subpaths with no
+  stability guarantee. `scripts/check-sim-boundary.mjs` does the same two checks (import
+  specifiers, a handful of bare global identifiers) via plain text scanning instead --
+  cruder, but with zero fragile dependency surface. `npm run lint` runs it.
+- `render()`, `handleInteraction`, and `buildInCell` were deliberately **not** extracted.
+  Fully parameterizing `render()` alone would mean threading something like 15 arguments
+  (camera state, `currentTool`, `hoveredCell`, `inspectedGuest`, the `SPRITES` table, ...)
+  through one function for little real gain -- it already calls clean, `ctx`-explicit
+  building blocks from `render/`. At that point `main.ts` is acting as the composition root
+  §4.2's own target layout describes ("`main.js`: bootstrap, wires sim + renderer + UI"), not
+  code that's still tangled.
 - ~~Make `rating` and `builtValue` derived rather than accumulated (§3.5).~~ Done — see
   `sim/park.ts`. This was pulled forward out of phase 4 because the server wants it before
   the validator is written.
+- ~~Litter leak (§3.6)~~ Done, landed alongside phase 4 rather than waiting for phase 6:
+  bulldozing a path now deletes its `litter` entry instead of leaking it in the save forever.
 
 Deferred with reasons rather than forgotten:
 
 - **Seeded RNG** (was phase 5). It only matters for server-authoritative replay, and we chose
-  trust model B. It gets cheaper once `sim/` is isolated, and nothing depends on it now.
-- **Litter leak and redundant `anchorOf`** (§3.6). Both are save-size problems, not
-  correctness ones, and both are cleanest to fix while splitting `sim/`.
+  trust model B. It gets cheaper now that `sim/` is isolated, and nothing depends on it yet.
+  `Math.random()` is still called directly throughout `sim/litter.ts`, `sim/rides.ts`,
+  `sim/staff.ts`, `sim/guests.ts`, and `sim/economy.ts` -- each says so in a comment. This is
+  also why `check-sim-boundary.mjs` doesn't flag `Math.random()` yet, unlike the ESLint rule
+  §4.2 originally called for; add that once seeded RNG lands.
+- **Redundant `anchorOf`** (§3.6, the other half). Still open, staying in phase 6 on purpose:
+  it's derivable from `map` + content (verified: footprints only ever extend down-right from
+  their anchor, so a deterministic scan reconstructs it exactly), but removing it from
+  `GameState` the way `rating`/`builtValue` were fixed means updating ~15+ read sites across
+  `sim/staff.ts`, `sim/rides.ts`, `sim/guests.ts`, and `main.ts` -- a real redesign, not a
+  bug fix.

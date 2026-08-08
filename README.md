@@ -14,7 +14,8 @@ npm test           # Playwright smoke suite
 
 ## Status
 
-**Phases 0–3 and 5 done; phase 4 partial.** Typecheck clean, 40 tests passing.
+**Phases 0–5 done; phase 6 partial.** Typecheck clean, 61 tests (55 pass with no backend
+running locally, all 61 pass with `npm run worker:dev` up).
 
 | Phase | | |
 |---|---|---|
@@ -22,32 +23,35 @@ npm test           # Playwright smoke suite
 | 1 | ✅ | Game extracted from the marketing page; 50 inline handlers → delegated dispatch |
 | 2 | ✅ | One `GameState`; save is `JSON.stringify(S)`; migrations that never reject |
 | 3 | ✅ | Content registry — nine hand-synced tables collapsed to one |
-| 4 | ◐ | `sim/finance.ts` out and the ledger fixed; `render/`, `ui/` and the rest of `sim/` still in `main.ts` |
+| 4 | ✅ | Full split: `sim/`, `ui/`, `render/` all out of `main.ts`. Every draw function is `ctx`-explicit; `sim/` is headless (checked by `npm run lint`, not real ESLint -- see ARCHITECTURE §8 for why) |
 | 5 | ✅ | One fixed-timestep clock; pause and frame-rate bugs fixed |
-| 6–8 | | Save-size cleanup, Postgres + API, accounts and up to 12 saved parks per player |
+| 6 | ◐ | Migration chain landed with phase 2. Litter-leak-on-bulldoze fixed; redundant `anchorOf` in the save still open |
+| 7–8 | | Postgres + API, accounts and up to 12 saved parks per player -- **done, see Backend below** |
 
 Bugs fixed along the way: reloading no longer empties a busy park; a version bump no longer
 destroys saves; pausing actually pauses (a paused park used to keep earning shop revenue);
 the simulation no longer runs faster on a 144 Hz monitor; the Finance tab reconciles after a
-demolish or undo; un-researched rides are greyed out again.
+demolish or undo; un-researched rides are greyed out again; bulldozing a path no longer leaks
+its litter entry into the save forever.
 
-`client/src/main.ts` is still ~4,400 lines. See [ARCHITECTURE.md](docs/ARCHITECTURE.md)
-§8 for exactly what phase 4 has left.
+`client/src/main.ts` is down to ~1,560 lines -- the composition root now, not the monolith.
+See [ARCHITECTURE.md](docs/ARCHITECTURE.md) §8 for the phase 4 postmortem.
 
 ## Backend
 
-Server not started. The **client half is built**: `net/client.ts` (typed API client) and
-`save/sync.ts` (local-first sync with 409 conflict handling), both written to the contract and
-tested against a fake server in `tests/sync.spec.ts`. Neither has talked to a real server yet.
-Missing on this side: `ui/auth.ts` — the login form, slot picker and conflict dialog that would
-drive the engine.
+**Done, and live at badrctycoon.com.** `server/` is a Cloudflare Workers API (Hono) over
+Postgres (Supabase, via Hyperdrive) -- accounts, cloud saves (up to 12 named parks per
+player), and a public leaderboard. The game still runs entirely in the browser and saves to
+`localStorage` first; signing in adds cloud saves, it was never a gate.
 
-**Picking up the server? Start at [docs/BACKEND-HANDOFF.md](docs/BACKEND-HANDOFF.md)** --
-orientation, build order and traps. [docs/API-CONTRACT.md](docs/API-CONTRACT.md) is the spec: endpoints, the save
-blob shape, optimistic concurrency, and the invariants the server must check rather than
-trust. `core/`, `content/`, `sim/finance` and `save/migrations` are proven Node-importable
-(`tests/portability.spec.ts`), so the server should reuse them instead of restating the
-cost table and the ledger rules.
+**Touching the server? Start at [docs/BACKEND-HANDOFF.md](docs/BACKEND-HANDOFF.md)** -- how
+it was built, how it actually runs, and the traps (native/WASM code doesn't run in a Workers
+isolate; Supabase's direct connection is IPv6-only). [docs/API-CONTRACT.md](docs/API-CONTRACT.md)
+is the spec: endpoints, the save blob shape, optimistic concurrency, and the invariants the
+server checks rather than trusts. `core/`, `content/`, `sim/` and `save/migrations` are proven
+Node-importable (`tests/portability.spec.ts`) and actually imported at the edge in production
+under `nodejs_compat` -- the server reuses them rather than restating the cost table and the
+ledger rules.
 
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — evaluation of the monolith, target module
   layout, trust model, and the phased migration plan
