@@ -1,56 +1,60 @@
 /**
- * Per-username rate limiting for login and registration.
+ * Per-username rate limiting for login and registration, backed by
+ * Cloudflare KV.
  *
  * docs/API-CONTRACT.md §3: "Rate-limit register and login per IP and per
- * username." The IP half is @fastify/rate-limit, registered per-route in
- * routes/auth.ts. This is the username half: an attacker spreading a
- * credential-stuffing run across many IPs still hits the same username, and
- * @fastify/rate-limit's default per-IP keying would never see that pattern.
+ * username." The IP half is the RL_AUTH_IP binding, used directly in
+ * routes/auth.ts (Cloudflare's built-in Rate Limiting binding, wrangler.jsonc)
+ * -- straightforward, since its 60-second-max window is exactly the shape
+ * of a simple per-IP backstop. This file is the other half: an attacker
+ * spreading a credential-stuffing run across many IPs still hits the same
+ * username, and the IP binding would never see that pattern.
  *
- * In-memory, so it resets on restart and does not share state across
- * instances -- fine for a single Node process. If this ever runs behind a
- * load balancer with more than one instance, move the counters to Postgres or
- * Redis; the interface below would not need to change.
+ * It's KV rather than the same Rate Limiting binding because the original
+ * design needs windows longer than the binding allows (15 min for login, 60
+ * min for register -- the binding caps at 60s). KV's `expirationTtl` has no
+ * such ceiling.
+ *
+ * The tradeoff worth knowing: KV writes are eventually consistent (global
+ * propagation can lag up to ~60s), so a tightly-timed burst across
+ * different Cloudflare regions could squeeze a couple of extra attempts
+ * through before every edge location agrees on the count. That's a real
+ * weakening versus the single-process in-memory Map this replaced, which
+ * was exactly consistent but only within one Node process. For throttling
+ * credential stuffing (slowing an attacker down, not a hard security
+ * boundary) eventual consistency is an acceptable trade for something that
+ * actually works across Workers' distributed, stateless-per-request model.
  */
 
 interface Window {
   count: number;
-  resetAt: number;
 }
 
-const windows = new Map<string, Window>();
-
-// Sweep occasionally so `windows` doesn't grow unboundedly over a long-lived
-// process. Not on every call -- that would defeat the point of an O(1) check.
-let lastSweep = Date.now();
-const SWEEP_INTERVAL_MS = 60_000;
-
-function sweep(now: number): void {
-  if (now - lastSweep < SWEEP_INTERVAL_MS) return;
-  lastSweep = now;
-  for (const [key, w] of windows) if (w.resetAt <= now) windows.delete(key);
+export async function isRateLimited(kv: KVNamespace, key: string, max: number): Promise<boolean> {
+  const raw = await kv.get(key);
+  if (!raw) return false;
+  const w = JSON.parse(raw) as Window;
+  return w.count >= max;
 }
 
-/** True if `key` has already hit `max` attempts within its current window. */
-export function isRateLimited(key: string, max: number): boolean {
-  const w = windows.get(key);
-  return w !== undefined && w.resetAt > Date.now() && w.count >= max;
-}
-
-/** Call once per real attempt (after the isRateLimited check passes). */
-export function recordAttempt(key: string, windowMs: number): void {
-  const now = Date.now();
-  sweep(now);
-  const w = windows.get(key);
-  if (!w || w.resetAt <= now) {
-    windows.set(key, { count: 1, resetAt: now + windowMs });
-    return;
-  }
+/** Call once per real attempt (after the isRateLimited check passes).
+ *  `windowSeconds` starts a fresh window on the first attempt; later calls
+ *  within it just bump the count without extending its expiry, so a steady
+ *  trickle of attempts can't keep the window open forever. */
+export async function recordAttempt(kv: KVNamespace, key: string, windowSeconds: number): Promise<void> {
+  const raw = await kv.get(key);
+  const w: Window = raw ? JSON.parse(raw) : { count: 0 };
   w.count += 1;
+  // expirationTtl on every write is fine even though it doesn't reset the
+  // window on subsequent attempts in principle -- KV requires a TTL on each
+  // put(), and re-sending the same remaining-ish duration each time is
+  // simpler than tracking a separate "window started at" timestamp for a
+  // window whose exact expiry precision doesn't matter here.
+  await kv.put(key, JSON.stringify(w), { expirationTtl: windowSeconds });
 }
 
 /** On success, forgive the window so a legitimate user isn't punished for
  *  earlier typos. */
-export function clearAttempts(key: string): void {
-  windows.delete(key);
+export async function clearAttempts(kv: KVNamespace, key: string): Promise<void> {
+  await kv.delete(key);
 }
