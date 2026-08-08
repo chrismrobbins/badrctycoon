@@ -11,6 +11,7 @@ import {
     pathTiles, staffCount, dailyWages, bfsRoute, stepRoute, wanderStep, updateStaff,
     hireStaff as hireStaffSim, fireStaff as fireStaffSim,
 } from './sim/staff';
+import { OBJECTIVES, checkObjectives as checkObjectivesSim } from './sim/objectives';
 import { createApi } from './net/client';
 import { mountAuthUI } from './ui/auth';
 import { getPlaytimeMs, startPlaytimeTracking, ensureAtLeast as ensurePlaytimeAtLeast } from './save/playtime';
@@ -886,17 +887,9 @@ function minimapJump(e) {
 }
 
 // ────── Objectives ──────
-const OBJECTIVES = [
-    { text: 'Connect a path to the entrance', reward: 250,  check: () => S.isParkOpen },
-    { text: 'Build your first ride',          reward: 500,  check: () => Object.keys(S.rideQueues).length > 0 },
-    { text: 'Reach 20 guests',                reward: 750,  check: () => S.guests >= 20 },
-    { text: 'Reach a park rating of 500',     reward: 1000, check: () => parkRating(S) >= 500 },
-    { text: 'Sell 25 items at your shops',    reward: 1000, check: () => S.shopSales >= 25 },
-    { text: '75% happiness with 30+ guests',  reward: 1500, check: () => S.parkHappiness >= 75 && S.guests >= 30 },
-    { text: 'Reach $30,000 park value',       reward: 2500, check: () => parkValue(S) >= 30000 },
-    { text: 'Host 100 guests at once',        reward: 5000, check: () => S.guests >= 100 },
-];
-
+// OBJECTIVES data and the pure ladder-advance logic moved to
+// sim/objectives.ts (phase 4); checkObjectives() below is a thin wrapper for
+// the event-log/fireworks/save side effects that belong to ui/render.
 function renderObjectives() {
     const list = document.getElementById('objective-list');
     if (!list) return;
@@ -912,10 +905,7 @@ function renderObjectives() {
 }
 
 function checkObjectives() {
-    while (S.objectiveIndex < OBJECTIVES.length && OBJECTIVES[S.objectiveIndex].check()) {
-        const o = OBJECTIVES[S.objectiveIndex];
-        earn(o.reward, 'objectives');
-        S.objectiveIndex++;
+    for (const o of checkObjectivesSim(S)) {
         logEvent(`★ Objective complete: ${o.text}! Bonus: $${o.reward.toLocaleString()}`, 'good');
         fireworksActive = true;
         fireworksTimer = Math.max(fireworksTimer, 4);
