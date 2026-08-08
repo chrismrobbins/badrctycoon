@@ -26,4 +26,4 @@ export { AWARD_BY_ID } from '../../client/src/content/awards';
 export { builtValue, parkValue, parkRating } from '../../client/src/sim/park';
 export { expectedFunds, ledgerReconciles } from '../../client/src/sim/finance';
 export { migrate } from '../../client/src/save/migrations';
-export { MAX_SAVE_BYTES } from '../../client/src/save/schema';
+export { MAX_SAVE_BYTES, summarize, type SaveSummary } from '../../client/src/save/schema';

@@ -3,10 +3,18 @@ import cookie from '@fastify/cookie';
 import rateLimit from '@fastify/rate-limit';
 import { env } from './env';
 import { ApiError } from './errors';
+import { MAX_SAVE_BYTES } from './shared';
 import { healthRoutes } from './routes/health';
 import { authRoutes } from './routes/auth';
+import { slotRoutes } from './routes/slots';
 
-const app = Fastify({ logger: true });
+const app = Fastify({
+  logger: true,
+  // API-CONTRACT.md §6 check 1: reject a save over 2 MB with 413. The wrapper
+  // fields (parkName, playtimeMs, baseRevision) around `state` are a few dozen
+  // bytes -- 4 KB of headroom is generous, not a loophole.
+  bodyLimit: MAX_SAVE_BYTES + 4096,
+});
 
 await app.register(cookie);
 // Global backstop; individual routes (auth) set stricter per-route limits via
@@ -19,22 +27,31 @@ app.setErrorHandler((error: unknown, request, reply) => {
     reply.code(error.status).send(error.toBody());
     return;
   }
-  // @fastify/rate-limit throws a plain Error with statusCode 429 rather than
-  // our ApiError -- give it the same envelope shape everything else uses.
+
   const statusCode =
     typeof error === 'object' && error !== null && 'statusCode' in error
       ? (error as { statusCode?: unknown }).statusCode
       : undefined;
+
+  // @fastify/rate-limit and Fastify's own bodyLimit both throw plain Errors
+  // with a statusCode rather than our ApiError -- give them the same envelope
+  // shape everything else uses.
   if (statusCode === 429) {
     reply.code(429).send({ error: { code: 'rate_limited', message: 'Too many requests.' } });
     return;
   }
+  if (statusCode === 413) {
+    reply.code(413).send({ error: { code: 'payload_too_large', message: 'Save is too large.' } });
+    return;
+  }
+
   request.log.error(error);
   reply.code(500).send({ error: { code: 'internal_error', message: 'Something went wrong.' } });
 });
 
 await app.register(healthRoutes);
 await app.register(authRoutes);
+await app.register(slotRoutes);
 
 try {
   await app.listen({ port: env.port, host: '0.0.0.0' });

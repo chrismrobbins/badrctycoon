@@ -8,6 +8,7 @@ import { randomBytes, createHash } from 'node:crypto';
 import type { FastifyReply, FastifyRequest } from 'fastify';
 import { pool } from '../db';
 import { env } from '../env';
+import { apiError } from '../errors';
 
 export const SESSION_COOKIE = 'session';
 const SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days -- matches the arcade (handoff §7)
@@ -73,6 +74,14 @@ export async function getSessionUser(request: FastifyRequest): Promise<SessionUs
   }
 
   return { id: row.id, username: row.username, displayName: row.displayName, isAdmin: row.isAdmin };
+}
+
+/** Like getSessionUser, but throws the standard 401 instead of returning null
+ *  -- what every route that isn't public wants. */
+export async function requireUser(request: FastifyRequest): Promise<SessionUser> {
+  const user = await getSessionUser(request);
+  if (!user) throw apiError(401, 'unauthenticated', 'Sign in required.');
+  return user;
 }
 
 export function setSessionCookie(reply: FastifyReply, token: string): void {
