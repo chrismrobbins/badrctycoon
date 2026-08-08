@@ -21,7 +21,7 @@ npm test           # Playwright smoke suite
 | Click the armed tool again | Leave build mode. A new park starts with no tool armed |
 | Screen edge | Edge-scroll (toggle in the camera HUD, remembered) |
 | **WASD** / arrows | Pan (hold — speed scales with zoom) |
-| **Q** / **E** | Rotate the park a quarter turn |
+| **Q** / **E** | Rotate a quarter turn — animated, and it chains if you hold them |
 | Scroll, **[** / **]** | Zoom (0.28×–3.2×) |
 | **C** | Recentre on the park |
 | Right-drag, middle-drag | Also pan |
@@ -126,10 +126,27 @@ out of the same cached PNG via CSS `background-position`
 bytes. The crop is needed because a cell is mostly padding: the figure's feet sit at the cell
 centre, which is the anchor the renderer needs but leaves a ~20px person adrift in a 64px box.
 
-**Rotation.** The park spins in quarter turns. A sprite renderer can't orbit a
-real camera, so this works the way isometric games have always done it: the map is rotated about
-the grid centre ([camera.ts](client/src/render/camera.ts)'s `rotateTile`) and each structure is
-drawn from a sprite baked at the matching angle. Three things this forces:
+**Rotation.** The park spins in quarter turns, and the turn is *animated* — the map sweeps round
+over ~420ms rather than snapping, so you can see which way it went.
+
+That needs **two** rotation numbers, because the renderer has two kinds of thing to rotate and
+they can't rotate the same way:
+
+- `rotationAngle` — the map plane, **continuous**. Ground, positions and depth come from this.
+- `rotation` — which baked sprite to use, **0–3**. A structure is a bitmap that exists at exactly
+  four angles and has no in-between image, so it takes the nearest and swaps at the 45° midpoint,
+  where the motion of everything else hides the change.
+
+Smooth where the geometry allows, quantised where the art forces it. True continuous rotation
+(Google-Maps style) would mean rendering the actual 3D models in the browser — a different
+renderer, not a bigger sprite sheet.
+
+The ground had to change with it: a tile used to be a fixed 64×32 diamond, which is only the
+right shape at the four square-on angles. Tiles are now **projected quads** (`blockCorners`),
+which tile seamlessly at any angle and reduce to exactly that diamond at angle 0. Measured at
+120 fps on a 35×35 park, rotating or idle.
+
+Three more things rotation forces:
 
 - **Depth is `rx + ry` in *rotated* space**, not `x + y`. Getting that wrong is the classic
   rotation bug — everything still draws, but structures behind you paint over ones in front.

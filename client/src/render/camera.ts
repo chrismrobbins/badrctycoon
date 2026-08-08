@@ -24,8 +24,41 @@ export const TILE_H = 32;
  */
 export let rotation = 0;
 
+/**
+ * The CONTINUOUS rotation, in quarter turns. Fractional during a turn.
+ *
+ * Two numbers, because the renderer has two kinds of thing to rotate and they
+ * cannot rotate the same way:
+ *
+ *   rotationAngle -- the map plane. Ground, positions and depth are computed
+ *     from this, so the park sweeps round smoothly instead of snapping.
+ *   rotation      -- which baked sprite to use, 0..3. A structure is a
+ *     pre-rendered bitmap that exists at exactly four angles and has no
+ *     in-between image, so it takes the NEAREST one and swaps at the halfway
+ *     point, where the motion of everything else hides the change.
+ *
+ * That split is the whole trick: continuous where it can be, quantised where
+ * the art forces it, and the swap timed to be least visible.
+ */
+export let rotationAngle = 0;
+
+// Rotation matrix for the current angle, recomputed only when it changes --
+// the ground pass calls rotateTile() four times per tile, and a 35x35 park
+// would otherwise be ~5,000 sin/cos per frame.
+let rotCos = 1;
+let rotSin = 0;
+
+export function setRotationAngle(a: number): void {
+  rotationAngle = a;
+  const t = a * (Math.PI / 2);
+  rotCos = Math.cos(t);
+  rotSin = Math.sin(t);
+  // Nearest baked angle. Math.round puts the swap at the 45-degree midpoint.
+  rotation = ((Math.round(a) % 4) + 4) % 4;
+}
+
 export function setRotation(r: number): void {
-  rotation = ((r % 4) + 4) % 4;
+  setRotationAngle(((r % 4) + 4) % 4);
 }
 
 /**
@@ -53,23 +86,40 @@ export function setGridSize(n: number): void {
  * park in roughly the same place on screen as it spins -- rotating about the
  * origin would fling it off into a corner.
  */
-export function rotateTile(x: number, y: number, grid = gridSize, r = rotation): { x: number; y: number } {
+export function rotateTile(x: number, y: number, grid = gridSize): { x: number; y: number } {
+  if (rotSin === 0 && rotCos === 1) return { x, y };
   const c = (grid - 1) / 2;
-  switch (((r % 4) + 4) % 4) {
-    case 1:
-      return { x: y, y: 2 * c - x };
-    case 2:
-      return { x: 2 * c - x, y: 2 * c - y };
-    case 3:
-      return { x: 2 * c - y, y: x };
-    default:
-      return { x, y };
-  }
+  const dx = x - c;
+  const dy = y - c;
+  // Clockwise on screen, matching which way the Blender models were turned.
+  return { x: c + dx * rotCos + dy * rotSin, y: c - dx * rotSin + dy * rotCos };
 }
 
-/** Inverse of rotateTile -- a rotation by -r. */
-export function unrotateTile(x: number, y: number, grid = gridSize, r = rotation): { x: number; y: number } {
-  return rotateTile(x, y, grid, -r);
+/** Inverse of rotateTile. */
+export function unrotateTile(x: number, y: number, grid = gridSize): { x: number; y: number } {
+  if (rotSin === 0 && rotCos === 1) return { x, y };
+  const c = (grid - 1) / 2;
+  const dx = x - c;
+  const dy = y - c;
+  return { x: c + dx * rotCos - dy * rotSin, y: c + dx * rotSin + dy * rotCos };
+}
+
+/**
+ * The four screen-space corners of a rectangular block of tiles.
+ *
+ * The ground used to be drawn as a fixed 64x32 diamond per tile, which is only
+ * correct at the four square-on angles. Rotation is an affine map of the tile
+ * lattice, so projecting the corners keeps every quad tiling seamlessly at any
+ * angle -- and at angle 0 it reproduces exactly the diamond it replaced.
+ */
+export function blockCorners(ax: number, ay: number, sz = 1): { x: number; y: number }[] {
+  const h = 0.5;
+  return [
+    toScreen(ax - h, ay - h),
+    toScreen(ax + sz - 1 + h, ay - h),
+    toScreen(ax + sz - 1 + h, ay + sz - 1 + h),
+    toScreen(ax - h, ay + sz - 1 + h),
+  ];
 }
 
 /**
@@ -85,7 +135,7 @@ export function unrotateTile(x: number, y: number, grid = gridSize, r = rotation
 export function toScreen(mapX: number, mapY: number): { x: number; y: number } {
   let mx = mapX;
   let my = mapY;
-  if (rotation !== 0) {
+  if (rotationAngle !== 0) {
     const r = rotateTile(mapX, mapY, gridSize);
     mx = r.x;
     my = r.y;
@@ -120,12 +170,12 @@ export function toMap(
   // centered on its integer coords, so round (not floor) is the exact
   // hit test — floor only resolved the bottom quadrant correctly and
   // shifted the other three a tile back.
-  const rx = Math.round((adjX / (TILE_W / 2) + adjY / (TILE_H / 2)) / 2);
-  const ry = Math.round((adjY / (TILE_H / 2) - adjX / (TILE_W / 2)) / 2);
-  if (rotation === 0) return { x: rx, y: ry };
-  // Un-rotate back into map space. Rounding again guards the half-tile that
-  // an even grid centre introduces.
-  const u = unrotateTile(rx, ry);
+  const fx = (adjX / (TILE_W / 2) + adjY / (TILE_H / 2)) / 2;
+  const fy = (adjY / (TILE_H / 2) - adjX / (TILE_W / 2)) / 2;
+  // Un-rotate FIRST, round after. Rounding to a tile before un-rotating
+  // quantises in the wrong space and drifts by a tile at fractional angles.
+  if (rotationAngle === 0) return { x: Math.round(fx), y: Math.round(fy) };
+  const u = unrotateTile(fx, fy);
   return { x: Math.round(u.x), y: Math.round(u.y) };
 }
 

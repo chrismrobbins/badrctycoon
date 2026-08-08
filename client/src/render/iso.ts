@@ -1,4 +1,35 @@
-import { TILE_W, TILE_H, toScreen } from './camera';
+import { TILE_W, TILE_H, toScreen, blockCorners } from './camera';
+
+/**
+ * Ground footprint of a tile (or an sz x sz block) as a projected QUAD.
+ *
+ * Replaces drawing a fixed 64x32 diamond, which is only the right shape at the
+ * four square-on angles. Under continuous rotation the lattice is sheared, and
+ * fixed diamonds leave gaps and overlaps between neighbours; projected corners
+ * tile seamlessly at any angle and reduce to exactly that diamond at angle 0.
+ */
+export function drawTileQuad(
+  ctx: CanvasRenderingContext2D,
+  ax: number,
+  ay: number,
+  sz: number,
+  color: string,
+  borderColor: string | null = null,
+): { x: number; y: number }[] {
+  const c = blockCorners(ax, ay, sz);
+  ctx.beginPath();
+  ctx.moveTo(c[0].x, c[0].y);
+  for (let i = 1; i < 4; i++) ctx.lineTo(c[i].x, c[i].y);
+  ctx.closePath();
+  ctx.fillStyle = color;
+  ctx.fill();
+  if (borderColor) {
+    ctx.strokeStyle = borderColor;
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+  return c;
+}
 
 /** Diamond footprint of a single tile, centered on (x, y) in world-space px. */
 export function drawPoly(ctx: CanvasRenderingContext2D, x: number, y: number, color: string, borderColor: string | null = null): void {

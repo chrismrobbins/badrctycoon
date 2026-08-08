@@ -32,13 +32,13 @@ import { TILE_W, TILE_H, toScreen, camOffset as camOffsetImpl, toMap as toMapImp
 import {
     drawPoly as drawPolyImpl, drawPolyN as drawPolyNImpl, drawGroundShadow as drawGroundShadowImpl,
     drawIsoDeck as drawIsoDeckImpl, drawPadFence as drawPadFenceImpl,
-    blockCenter, padHalf, setPad, PAD_W, PAD_H, tileHash,
+    blockCenter, padHalf, setPad, PAD_W, PAD_H, tileHash, drawTileQuad,
 } from './render/iso';
 import { simClock, isNight, advanceSimClock, setIsNight } from './render/clock';
 import { drawEntrance as drawEntranceImpl, drawParkFence as drawParkFenceImpl } from './render/sprites/scenery';
 import { SPRITES } from './render/sprites';
 import {
-    setRotation, setGridSize, rotation, depthOf,
+    setRotation, setRotationAngle, setGridSize, rotation, rotationAngle, depthOf, blockCorners,
 } from './render/camera';
 import {
     panDelta, panKeyDown, panKeyUp, clearHeldKeys,
@@ -973,25 +973,23 @@ function render() {
             const screenPos = toScreen(x, y);
             const csz = cell ? (BUILD_DATA[cell]?.size || 1) : 1;
             if (cell && csz > 1) {
-                drawPolyN(x, y, csz, isDark ? '#2e3d52' : '#c3ced9', RIDE_ACCENT[cell] || (isDark ? '#475569' : '#94a3b8'));
-                // Concrete expansion joints across the pad
-                const c2 = blockCenter(x, y, csz);
-                const ph = padHalf(csz);
+                const q = drawTileQuad(ctx, x, y, csz,
+                    isDark ? '#2e3d52' : '#c3ced9',
+                    RIDE_ACCENT[cell] || (isDark ? '#475569' : '#94a3b8'));
+                // Expansion joints, interpolated along the pad's real corners
+                // so they stay square to it while the map turns.
+                const lerp = (a, b, f) => ({ x: a.x + (b.x - a.x) * f, y: a.y + (b.y - a.y) * f });
                 ctx.strokeStyle = 'rgba(148, 163, 184, 0.18)';
                 ctx.lineWidth = 1;
                 for (let g = 1; g < csz; g++) {
                     const f = g / csz;
-                    ctx.beginPath();
-                    ctx.moveTo(c2.x - ph.w + ph.w * f, c2.y + ph.h * f - ph.h);
-                    ctx.lineTo(c2.x + ph.w * f, c2.y + ph.h - ph.h * f);
-                    ctx.stroke();
-                    ctx.beginPath();
-                    ctx.moveTo(c2.x + ph.w - ph.w * f, c2.y + ph.h * f - ph.h);
-                    ctx.lineTo(c2.x - ph.w * f, c2.y + ph.h - ph.h * f);
-                    ctx.stroke();
+                    const p1 = lerp(q[0], q[1], f), p2 = lerp(q[3], q[2], f);
+                    ctx.beginPath(); ctx.moveTo(p1.x, p1.y); ctx.lineTo(p2.x, p2.y); ctx.stroke();
+                    const p3 = lerp(q[0], q[3], f), p4 = lerp(q[1], q[2], f);
+                    ctx.beginPath(); ctx.moveTo(p3.x, p3.y); ctx.lineTo(p4.x, p4.y); ctx.stroke();
                 }
             } else if (cell === 'path' || cell === 'entrance') {
-                drawPoly(screenPos.x, screenPos.y, pathColor, pathBorder);
+                drawTileQuad(ctx, x, y, 1, pathColor, pathBorder);
                 // Paving joints for texture
                 ctx.strokeStyle = 'rgba(0,0,0,0.07)'; ctx.lineWidth = 1;
                 ctx.beginPath();
@@ -1005,7 +1003,7 @@ function render() {
                 // Trash lying on the pavement
                 drawLitterAt(x, y, screenPos.x, screenPos.y);
             } else {
-                drawPoly(screenPos.x, screenPos.y, grassColor, grassBorder);
+                drawTileQuad(ctx, x, y, 1, grassColor, grassBorder);
             }
         }
     }
@@ -1109,7 +1107,7 @@ function render() {
         const toolData = BUILD_DATA[currentTool];
         if (currentTool === 'bulldozer') {
             const sp = toScreen(hx, hy);
-            drawPoly(sp.x, sp.y, (hCell === 'entrance') ? 'rgba(156, 163, 175, 0.5)' : 'rgba(239, 68, 68, 0.45)');
+            drawTileQuad(ctx, hx, hy, 1, (hCell === 'entrance') ? 'rgba(156, 163, 175, 0.5)' : 'rgba(239, 68, 68, 0.45)');
         } else if (toolData && toolData.size > 1) {
             const tsz = toolData.size;
             let fits = true;
@@ -1396,14 +1394,54 @@ function syncCamHud() {
 // the centre of the viewport, rotate, then pan so that same tile is back under
 // the crosshair. Without this, every rotation throws the view somewhere else
 // and the feature feels broken rather than useful.
+// The turn is animated rather than snapped. A quarter turn that happens
+// between two frames gives you no idea which way the park went -- you just
+// find yourself somewhere else, which is exactly what "Q and E just move me
+// around" was describing.
+//
+// The map plane rotates CONTINUOUSLY (camera.ts's rotationAngle). The
+// structures cannot: each is a bitmap baked at four angles with nothing in
+// between, so it snaps to the nearest at the 45-degree midpoint -- while
+// everything around it is sweeping, which is the moment the swap is least
+// visible. Smooth where the geometry allows, quantised where the art forces
+// it.
+const ROT_MS = 420;               // long enough to read, short enough not to wait
+let rotFrom = 0, rotTo = 0, rotT = 1;
+let rotPivot = null;              // the map tile held under the viewport centre
+
 function rotateView(delta) {
-    const before = toMap(canvas.width / 2, canvas.height / 2);
-    setRotation(rotation + delta);
-    const after = toScreen(before.x, before.y);
-    const o = camOffset();
-    // Where that tile now lands vs where we want it (viewport centre).
-    panX += canvas.width / 2 - (after.x * zoom + o.x);
-    panY += canvas.height / 2 - (after.y * zoom + o.y);
+    // Chain from wherever the current turn has got to, so hammering E spins
+    // continuously instead of restarting from a snapped angle each time.
+    rotFrom = rotationAngle;
+    rotTo = Math.round(rotTo) + delta;
+    rotT = 0;
+    rotPivot = toMap(canvas.width / 2, canvas.height / 2);
+    syncCamHud();
+}
+
+/** Advance the turn. `wallMs` is real time -- rotation is a camera move, so it
+ *  keeps going while the game is paused. */
+function stepRotation(wallMs) {
+    if (rotT >= 1) return;
+    rotT = Math.min(1, rotT + wallMs / ROT_MS);
+    // Smoothstep: eases out of the old angle and into the new one, so the
+    // start and stop don't jolt.
+    const e = rotT * rotT * (3 - 2 * rotT);
+    setRotationAngle(rotFrom + (rotTo - rotFrom) * e);
+
+    // Keep the tile you were looking at pinned under the viewport centre for
+    // the whole sweep. Without this the park orbits away from you as it turns.
+    if (rotPivot) {
+        const p = toScreen(rotPivot.x, rotPivot.y);
+        const o = camOffset();
+        panX += canvas.width / 2 - (p.x * zoom + o.x);
+        panY += canvas.height / 2 - (p.y * zoom + o.y);
+    }
+    if (rotT >= 1) {
+        setRotationAngle(((rotTo % 4) + 4) % 4);   // land exactly on a baked angle
+        rotFrom = rotTo = rotationAngle;
+        rotPivot = null;
+    }
     syncCamHud();
 }
 
@@ -1800,6 +1838,7 @@ function frame(now: number) {
     if (nav.dx || nav.dy) { panX += nav.dx; panY += nav.dy; }
     const edge = edgeDelta(wall);
     if (edge) { panX += edge.dx; panY += edge.dy; }
+    stepRotation(wall);
 
     const simMs = wall * gameSpeed;
     advanceSimClock(simMs);
