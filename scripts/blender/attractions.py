@@ -1079,6 +1079,223 @@ def build_guest(variant):
     return drive
 
 
+
+# ==================================================================
+# STAFF
+# ==================================================================
+
+# Row order of the staff sheet: OUTFITS[i] occupies rows i*4 .. i*4+3, one per
+# facing. render/staffsprite.ts maps (kind, name) onto this list, so the ORDER
+# HERE IS THE CONTRACT -- inserting an outfit in the middle re-costumes the
+# whole park with no error. Append, don't insert.
+#
+# Janitors and mechanics get one workwear outfit each; entertainers get four,
+# picked per-worker from a hash of their name, because a park full of
+# identical clowns is worse than no clowns.
+STAFF_OUTFITS = [
+    "janitor",      # 0
+    "mechanic",     # 1
+    "clown",        # 2  entertainer
+    "jester",       # 3  entertainer
+    "mascot",       # 4  entertainer
+    "ringmaster",   # 5  entertainer
+]
+
+C_SKIN = "#fcd9b6"
+C_TROUSERS = "#334155"
+
+
+def _person(root, shirt_mat, trousers_mat, skin_mat, hair_col="#3f2d16",
+            head_scale=1.0, bulk=1.0):
+    """Shared humanoid base: torso, head, hair, and the four pivoting limbs.
+
+    Returns the limb list so the caller's drive() can pose them. Guests and
+    staff share these proportions on purpose -- staff that read as a different
+    species from the crowd look like a bug, not like uniforms.
+    """
+    torso = bmesh.new()
+    box(torso, uh(5.0 * bulk), uh(3.6 * bulk), uv(8), (0, 0, uv(12)))
+    sphere(torso, uh(2.9 * bulk), (0, 0, uv(16.2)), scale=(1.0, 0.85, 0.7), segments=8)
+    obj("Torso", torso, [shirt_mat], parent=root)
+
+    head = bmesh.new()
+    sphere(head, uh(3.0 * head_scale), (0, 0, uv(18.6)),
+           scale=(0.95, 0.95, 1.05), segments=10)
+    obj("Head", head, [skin_mat], parent=root)
+
+    if hair_col:
+        hair = bmesh.new()
+        sphere(hair, uh(3.05 * head_scale), (0, 0, uv(19.6)),
+               scale=(0.95, 0.95, 0.6), segments=10)
+        obj("Hair", hair, [mat("s_hair_%s" % hair_col.lstrip("#"), hair_col, 0.8)],
+            parent=root)
+
+    limbs = []
+    for side in (-1, 1):
+        leg = bmesh.new()
+        box(leg, uh(2.0), uh(2.0), uv(8), (0, 0, -uv(4)))
+        box(leg, uh(2.6), uh(2.4), uv(1.6), (uh(0.4), 0, -uv(8.4)))
+        o = obj("Leg%d" % side, leg,
+                [trousers_mat, mat("s_shoes", "#1c1917", 0.6)],
+                parent=root, loc=(0, side * uh(1.7), uv(8)))
+        for pg in o.data.polygons:
+            pg.material_index = 1 if pg.center.z < -uv(7.4) else 0
+        limbs.append(("leg", side, o))
+
+        arm = bmesh.new()
+        box(arm, uh(1.7), uh(1.7), uv(7), (0, 0, -uv(3.5)))
+        sphere(arm, uh(1.5), (0, 0, -uv(7)), segments=6)
+        o = obj("Arm%d" % side, arm, [shirt_mat, skin_mat], parent=root,
+                loc=(0, side * uh(3.4 * bulk), uv(15.5)))
+        for pg in o.data.polygons:
+            pg.material_index = 1 if pg.center.z < -uv(6.0) else 0
+        limbs.append(("arm", side, o))
+    return limbs
+
+
+def build_staff(variant):
+    """variant = outfitIndex * 4 + directionIndex (see STAFF_OUTFITS)."""
+    oi, di = divmod(variant, len(GUEST_DIRS))
+    outfit = STAFF_OUTFITS[oi]
+
+    root = empty("Staff")
+    dx, dy = GUEST_DIRS[di]
+    root.rotation_euler = (0, 0, math.atan2(dy, dx))
+
+    skin = mat("s_skin", C_SKIN, 0.65)
+    trousers = mat("s_trousers", C_TROUSERS, 0.75)
+    props = []                      # (object, kind) posed by drive()
+
+    if outfit == "janitor":
+        # Workwear: green polo over dark trousers, ball cap, push broom.
+        limbs = _person(root, mat("s_jan", "#22c55e", 0.7), trousers, skin)
+        cap = bmesh.new()
+        cyl(cap, uh(3.2), uv(1.6), (0, 0, uv(21.0)), segments=10)
+        box(cap, uh(3.4), uh(2.2), uv(0.7), (uh(2.4), 0, uv(20.6)))      # peak
+        obj("Cap", cap, [mat("s_jan_cap", "#15803d", 0.7)], parent=root)
+
+        broom = bmesh.new()
+        tube(broom, (0, 0, uv(14)), (uh(7), 0, -uv(2)), uh(0.8), segments=6)
+        obj("BroomStick", broom, [mat("s_wood", "#a16207", 0.85)], parent=root)
+        head_ = bmesh.new()
+        box(head_, uh(2.0), uh(7.0), uv(2.4), (uh(7), 0, -uv(2)))
+        b = obj("BroomHead", head_, [mat("s_bristle", "#eab308", 0.9)], parent=root)
+        props.append((b, "sweep"))
+
+    elif outfit == "mechanic":
+        # Hi-vis overalls, hard hat, wrench. Reads as workwear at 20px
+        # because the hat is a hard silhouette break.
+        limbs = _person(root, mat("s_mech", "#f59e0b", 0.7),
+                        mat("s_mech_leg", "#b45309", 0.8), skin, hair_col=None)
+        hat = bmesh.new()
+        sphere(hat, uh(3.3), (0, 0, uv(20.2)), scale=(1, 1, 0.62), segments=12)
+        cyl(hat, uh(4.3), uv(0.8), (0, 0, uv(19.6)), segments=14)         # brim
+        obj("HardHat", hat, [mat("s_hat", "#fbbf24", 0.5)], parent=root)
+
+        belt = bmesh.new()
+        cyl(belt, uh(3.1), uv(1.6), (0, 0, uv(9.6)), segments=12)
+        obj("ToolBelt", belt, [mat("s_belt", "#44403c", 0.8)], parent=root)
+
+        wr = bmesh.new()
+        box(wr, uh(1.2), uh(4.6), uv(1.0), (0, 0, 0))
+        box(wr, uh(2.6), uh(2.0), uv(1.0), (0, uh(2.6), 0))
+        w = obj("Wrench", wr, [mat("s_steel", "#cbd5e1", 0.3, metal=0.8)],
+                parent=root, loc=(uh(1.0), uh(4.6), uv(9.0)))
+        props.append((w, "hold"))
+
+    elif outfit == "clown":
+        # Baggy red/yellow motley, white face, red nose, blue hair tufts,
+        # oversized shoes, ruff collar.
+        limbs = _person(root, mat("s_clown", "#ef4444", 0.6),
+                        mat("s_clown_leg", "#facc15", 0.6),
+                        mat("s_clown_face", "#fef2f2", 0.7), hair_col=None)
+        tufts = bmesh.new()
+        for sx in (-1, 1):
+            sphere(tufts, uh(2.3), (0, sx * uh(2.8), uv(19.4)), segments=8)
+        obj("Tufts", tufts, [mat("s_clown_hair", "#38bdf8", 0.75)], parent=root)
+        ruff = bmesh.new()
+        cyl(ruff, uh(4.6), uv(1.4), (0, 0, uv(16.6)), segments=14)
+        obj("Ruff", ruff, [mat("s_clown_ruff", "#fef08a", 0.6)], parent=root)
+        nose = bmesh.new()
+        sphere(nose, uh(1.2), (uh(2.6), 0, uv(18.4)), segments=6)
+        obj("Nose", nose, [mat("s_nose", "#dc2626", 0.4)], parent=root)
+        shoes = bmesh.new()
+        for sx in (-1, 1):
+            box(shoes, uh(5.4), uh(2.8), uv(1.4), (uh(1.6), sx * uh(1.7), uv(0.7)))
+        obj("BigShoes", shoes, [mat("s_clown_shoe", "#facc15", 0.6)], parent=root)
+
+    elif outfit == "jester":
+        # Purple/gold motley with a belled three-point cap.
+        limbs = _person(root, mat("s_jest", "#8b5cf6", 0.55),
+                        mat("s_jest_leg", "#f59e0b", 0.55), skin, hair_col=None)
+        cap = bmesh.new()
+        for a in (0.0, 2.1, 4.2):
+            tip = (math.cos(a) * uh(4.0), math.sin(a) * uh(4.0), uv(23.5))
+            tube(cap, (0, 0, uv(20.4)), tip, uh(1.5), segments=6)
+            sphere(cap, uh(1.3), tip, segments=6)
+        sphere(cap, uh(3.2), (0, 0, uv(20.2)), scale=(1, 1, 0.7), segments=10)
+        obj("JesterCap", cap, [mat("s_jest_cap", "#a855f7", 0.55)], parent=root)
+        collar = bmesh.new()
+        cyl(collar, uh(4.4), uv(1.2), (0, 0, uv(16.6)), segments=6)
+        obj("Collar", collar, [mat("s_jest_collar", "#fbbf24", 0.5)], parent=root)
+
+    elif outfit == "mascot":
+        # Oversized character head -- the one silhouette that reads instantly
+        # at this size, which is the whole point of a mascot.
+        limbs = _person(root, mat("s_masc", "#ec4899", 0.7),
+                        mat("s_masc", "#ec4899", 0.7),
+                        mat("s_masc", "#ec4899", 0.7), hair_col=None, bulk=1.15)
+        head = bmesh.new()
+        sphere(head, uh(6.2), (0, 0, uv(21.5)), scale=(1, 1, 0.95), segments=14)
+        obj("MascotHead", head, [mat("s_masc_head", "#f472b6", 0.75)], parent=root)
+        ears = bmesh.new()
+        for sx in (-1, 1):
+            sphere(ears, uh(2.6), (0, sx * uh(5.0), uv(25.5)), segments=10)
+        obj("Ears", ears, [mat("s_masc_ear", "#fbcfe8", 0.75)], parent=root)
+        face = bmesh.new()
+        for sx in (-1, 1):
+            sphere(face, uh(1.1), (uh(5.2), sx * uh(2.0), uv(22.6)), segments=6)
+        obj("Eyes", face, [mat("s_masc_eye", "#1c1917", 0.4)], parent=root)
+        snout = bmesh.new()
+        sphere(snout, uh(2.2), (uh(5.6), 0, uv(20.4)), segments=8)
+        obj("Snout", snout, [mat("s_masc_snout", "#fff1f2", 0.75)], parent=root)
+
+    else:  # ringmaster
+        # Red tailcoat, white shirt front, black top hat, cane.
+        limbs = _person(root, mat("s_ring", "#dc2626", 0.5),
+                        mat("s_ring_leg", "#1c1917", 0.6), skin)
+        hat = bmesh.new()
+        cyl(hat, uh(4.6), uv(0.9), (0, 0, uv(20.6)), segments=14)          # brim
+        cyl(hat, uh(3.0), uv(6.0), (0, 0, uv(23.6)), segments=12)          # crown
+        cyl(hat, uh(3.1), uv(1.0), (0, 0, uv(21.6)), segments=12)          # band
+        obj("TopHat", hat, [mat("s_tophat", "#111827", 0.45)], parent=root)
+        shirt = bmesh.new()
+        box(shirt, uh(1.2), uh(2.6), uv(6), (uh(2.4), 0, uv(12.5)))
+        obj("ShirtFront", shirt, [mat("s_ring_shirt", "#f8fafc", 0.5)], parent=root)
+        cane = bmesh.new()
+        tube(cane, (0, 0, uv(13)), (0, 0, -uv(9)), uh(0.7), segments=6)
+        sphere(cane, uh(1.3), (0, 0, uv(13)), segments=6)
+        c = obj("Cane", cane, [mat("s_cane", "#fbbf24", 0.35, metal=0.6)],
+                parent=root, loc=(uh(3.2), uh(4.0), 0))
+        props.append((c, "hold"))
+
+    def drive(f, n):
+        t = f / n * 2 * math.pi
+        for kind, side, o in limbs:
+            swing = math.sin(t + (0 if side > 0 else math.pi))
+            amp = 0.55 if kind == "leg" else 0.40
+            o.rotation_euler = (0, swing * amp * (1 if kind == "leg" else -1), 0)
+        for o, how in props:
+            if how == "sweep":
+                # Broom head scrubs fore/aft, twice per stride, which is what
+                # makes a janitor read as working rather than as carrying a stick.
+                o.location = (uh(math.sin(t * 2) * 2.0), 0, 0)
+            else:
+                o.rotation_euler = (0, math.sin(t) * 0.12, 0)
+        root.location = (0, 0, abs(math.sin(t)) * uv(0.8))
+    return drive
+
+
 # ==================================================================
 # MANIFEST
 # ==================================================================
@@ -1113,6 +1330,8 @@ MANIFEST = [
     # guests -- not a tile attraction; 7 shirt colours x 4 walk directions
     dict(id="guest",        tiles=1, w=48,  h=64,  frames=6,
          variants=len(GUEST_COLORS) * len(GUEST_DIRS), build=build_guest),
+    dict(id="staff",        tiles=1, w=56,  h=72,  frames=6,
+         variants=len(STAFF_OUTFITS) * len(GUEST_DIRS), build=build_staff),
     # rides -- 4x4
     dict(id="megacoaster",  tiles=4, w=320, h=352, frames=12, variants=1, build=build_megacoaster),
 ]

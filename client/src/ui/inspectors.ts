@@ -4,6 +4,8 @@ import { getSceneryBonusAt } from '../sim/scenery';
 import { isNightAt } from '../sim/time';
 import { litterAt } from '../sim/litter';
 import { logEvent } from './eventlog';
+import { guestPortraitStyle } from '../render/portrait';
+import { colorRow } from '../render/guestsprite';
 import { money } from './management';
 
 // ── Naming ──
@@ -166,10 +168,15 @@ export function renderGuestStats(state: GameState): void {
             ? ['Unhappy', 'text-orange-500']
             : ['Furious', 'text-red-500'];
   document.getElementById('guest-name').textContent = g.name;
+  // Show the guest, not a swatch: the sprite the renderer is drawing on the
+  // map, cropped out of the same cached sheet (render/portrait.ts).
   document.getElementById('guest-stats').innerHTML =
-    `<div style="display:flex;align-items:center;gap:0.5rem;margin-bottom:0.25rem;">
-            <span style="width:0.75rem;height:0.75rem;border-radius:999px;background:${g.color}"></span>
-            <span style="font-weight:700;color:${CLS2HEX[mood[1]] || '#94a3b8'}">${mood[0]}</span>
+    `<div style="display:flex;align-items:center;gap:0.625rem;margin-bottom:0.5rem;">
+            <span style="${guestPortraitStyle(colorRow(g.color))}"></span>
+            <div style="min-width:0;">
+              <div style="font-weight:700;color:${CLS2HEX[mood[1]] || '#94a3b8'}">${mood[0]}</div>
+              <div style="font-size:10px;color:#94a3b8;">${g.queuedAt ? 'In a queue' : 'Wandering the park'}</div>
+            </div>
             ${g.hasBalloon ? '<i class="fas fa-circle" style="color:#f472b6;font-size:8px;margin-left:auto;" title="Has a balloon"></i>' : ''}</div>` +
     bar('Happiness', g.happiness) +
     bar('Hunger', g.hunger, null, true) +

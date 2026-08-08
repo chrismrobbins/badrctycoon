@@ -40,6 +40,7 @@ export const STRIPS: Record<string, GeneratedStrip> = {
   megacoaster: { frames: 12, variants: 1, w: 320, h: 352, tiles: 4 },
   restroom: { frames: 1, variants: 1, w: 96, h: 112, tiles: 1 },
   ship: { frames: 16, variants: 1, w: 176, h: 208, tiles: 2 },
+  staff: { frames: 6, variants: 24, w: 56, h: 72, tiles: 1 },
   teacups: { frames: 16, variants: 1, w: 96, h: 112, tiles: 1 },
   trashcan: { frames: 1, variants: 1, w: 96, h: 96, tiles: 1 },
   tree: { frames: 8, variants: 3, w: 96, h: 128, tiles: 1 },

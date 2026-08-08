@@ -43,7 +43,7 @@ const sheet = g ? loadSheet('guest', g) : null;
 
 export const guestSpriteReady = (): boolean => !!sheet?.ready;
 
-function colorRow(color: string): number {
+export function colorRow(color: string): number {
   const i = COLORS.indexOf(color);
   return i < 0 ? 0 : i;
 }

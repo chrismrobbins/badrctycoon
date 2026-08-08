@@ -3,6 +3,8 @@ import * as Fin from '../sim/finance';
 import { parkValue, parkRating } from '../sim/park';
 import { perceivedValue, DAILY_INTEREST } from '../sim/economy';
 import { staffCount, dailyWages } from '../sim/staff';
+import { staffPortraitStyle } from '../render/portrait';
+import { outfitIndex } from '../render/staffsprite';
 import { AWARD_DEFS } from '../sim/awards';
 import { STAFF_KINDS, MARKETING_CAMPAIGNS, RESEARCH_ORDER, TYPE_LABEL, BUILD_DATA, type StaffKindId, type MarketingCampaignId } from '../content';
 
@@ -114,7 +116,13 @@ export function renderMgmt(state: GameState): void {
         state.staff
           .map(
             (w) =>
-              `<div style="display:flex;justify-content:space-between;font-size:11px;padding:2px 0;"><span><i class="fas ${STAFF_KINDS[w.kind].icon}" style="color:${STAFF_KINDS[w.kind].color};margin-right:0.375rem;"></i>${w.name}</span><span style="color:${C.slate};font-style:italic;">${w.task || 'starting shift'}</span></div>`,
+              // The worker's actual costume, not a generic glyph -- an
+              // entertainer's outfit is picked per-hire, so this is the only
+              // place you can see which one you got.
+              `<div style="display:flex;align-items:center;gap:0.5rem;font-size:11px;padding:3px 0;">
+                 <span style="${staffPortraitStyle(outfitIndex(w.kind, w.name), 1.4)}"></span>
+                 <span style="flex:1;min-width:0;">${w.name}</span>
+                 <span style="color:${C.slate};font-style:italic;">${w.task || 'starting shift'}</span></div>`,
           )
           .join('') +
         `</div>`;

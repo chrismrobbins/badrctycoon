@@ -5,6 +5,7 @@ import type { GameState } from '../core/state';
 import { toScreen, TILE_W, TILE_H } from './camera';
 import { tileHash } from './iso';
 import { simClock } from './clock';
+import { drawStaffSprite } from './staffsprite';
 
 /** Drawn per-worker so staff can join the scene's depth sort. */
 export function drawStaffOne(ctx: CanvasRenderingContext2D, w: Staff): void {
@@ -19,6 +20,16 @@ export function drawStaffOne(ctx: CanvasRenderingContext2D, w: Staff): void {
   ctx.beginPath();
   ctx.ellipse(p.x, p.y, 3.5, 1.6, 0, 0, Math.PI * 2);
   ctx.fill();
+
+  // Baked costume (render/staffsprite.ts). Its anchor is the worker's feet,
+  // so the bob is applied to the blit rather than baked into the frames, and
+  // the tool of the trade -- broom, wrench, cane -- is part of the model.
+  // `swing` is the worker's own per-hire offset, reused here so a cleaning
+  // crew doesn't march in step.
+  if (drawStaffSprite(ctx, p.x, p.y - bob, w.kind, w.name, w.tx - w.x, w.ty - w.y, simClock + w.swing * 300)) {
+    return;
+  }
+  // Vector fallback below, unchanged: the sheet may not have decoded yet.
   // Uniform body + head + cap
   ctx.fillStyle = k.color;
   ctx.beginPath();

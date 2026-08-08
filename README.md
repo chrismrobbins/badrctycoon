@@ -64,7 +64,7 @@ ledger rules.
 
 ## Graphics
 
-**Every attraction sprite — and the guests — are baked in Blender** rather than drawn with canvas paths — the same
+**Every attraction sprite, plus the guests and staff, are baked in Blender** rather than drawn with canvas paths — the same
 trick RollerCoaster Tycoon used. It fits because the game's 2:1 dimetric projection is one an
 orthographic camera reproduces *exactly*: at rot X 60° / Z 45° the ground squash is
 `sin 30° = 0.5`, so a 1×1 Blender unit lands precisely on the 64×32 tile. Verified by rendering
@@ -87,12 +87,28 @@ node scripts/blender/pack-strip.mjs                            # -> sheets + gen
 **Sheet layout**: columns are animation frames, rows are `tileHash` variants (three tree
 species, benches with and without a resting guest). Stored at 2× because zoom clamps to 1.8.
 
-**Guests** don't sit on a tile, so they use `loadSheet()` — the lower-level accessor `loadStrip()`
-is built on — and address cells directly: 6 walk frames across, `shirtColour × 4 + facing` down
-(28 rows). The colour and direction lists in [guestsprite.ts](client/src/render/guestsprite.ts)
-must stay in the same order as `Guest`'s palette in `main.ts` and `DIRS` in `sim/guests.ts`;
-that ordering is the whole contract, and getting it wrong faces everyone the wrong way silently.
-Balloons and the happiness indicator stay canvas — they're per-guest state.
+**People** don't sit on a tile, so they use `loadSheet()` — the lower-level accessor `loadStrip()`
+is built on — and address cells directly, 6 walk frames across:
+
+- **Guests**: `shirtColour × 4 + facing` (28 rows). Balloons and the happiness indicator stay
+  canvas — they're per-guest state.
+- **Staff**: `outfit × 4 + facing` (24 rows). Janitors get a green polo, cap and a push broom
+  that sweeps as they walk; mechanics get hi-vis overalls, a hard hat and a wrench. Entertainers
+  get **four** costumes — clown, jester, mascot, ringmaster — assigned per hire from a hash of
+  the worker's name, so a costume is stable across saves without adding a field to `Staff`, and
+  a park doesn't fill up with identical clowns.
+
+The colour, outfit and direction lists in [guestsprite.ts](client/src/render/guestsprite.ts) and
+[staffsprite.ts](client/src/render/staffsprite.ts) must stay in the same order as their sources
+(`Guest`'s palette in `main.ts`, `STAFF_OUTFITS` in the Blender script, `DIRS` in `sim/guests.ts`).
+**That ordering is the whole contract** — insert an outfit in the middle and janitors become
+clowns with no error. Append, never insert.
+
+**Portraits.** The guest inspector and the staff list show the character's real sprite, cropped
+out of the same cached PNG via CSS `background-position`
+([portrait.ts](client/src/render/portrait.ts)) — no canvas, no second copy of the art, no extra
+bytes. The crop is needed because a cell is mostly padding: the figure's feet sit at the cell
+centre, which is the anchor the renderer needs but leaves a ~20px person adrift in a 64px box.
 
 Three rules the pipeline enforces so this can't rot:
 
@@ -110,7 +126,7 @@ Three rules the pipeline enforces so this can't rot:
 `tests/sprites.spec.ts` imports the generated table and fails if any PNG's real dimensions
 disagree with it, which is the failure a screenshot test sails straight past.
 
-**Cost: 0.81 MB of sheets** (21 sheets, including guests) against a ~140 KB JS bundle. Sheets are packed to a 256-colour
+**Cost: 0.87 MB of sheets** (22 sheets, including guests and staff) against a ~140 KB JS bundle. Sheets are packed to a 256-colour
 palette: these are flat-shaded renders of a handful of materials, so quantising is near-lossless
 (measured mean error 1–2/255, indistinguishable side by side) for ~25% of the bytes — 2.9 MB
 truecolour became 0.75 MB. **128 colours is not safe**: it visibly dithers the large flat
