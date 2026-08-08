@@ -38,6 +38,7 @@ export const STRIPS: Record<string, GeneratedStrip> = {
   coaster: { frames: 12, variants: 4, rot: 4, w: 176, h: 208, tiles: 2 },
   drinkstall: { frames: 8, variants: 4, rot: 4, w: 128, h: 144, tiles: 1 },
   droptower: { frames: 16, variants: 1, rot: 1, w: 96, h: 208, tiles: 1 },
+  entrance: { frames: 1, variants: 4, rot: 4, w: 176, h: 176, tiles: 1 },
   ferriswheel: { frames: 12, variants: 4, rot: 4, w: 176, h: 272, tiles: 2 },
   flowerbed: { frames: 6, variants: 2, rot: 1, w: 96, h: 96, tiles: 1 },
   foodstall: { frames: 8, variants: 4, rot: 4, w: 96, h: 128, tiles: 1 },

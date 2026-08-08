@@ -120,8 +120,23 @@
             <div class="h-32 border-t border-black/5 dark:border-white/5 bg-white/50 dark:bg-black/30 p-3 overflow-y-auto custom-scroll shrink-0" id="event-log">
                 <div class="text-[10px] text-slate-500 mb-1">System initialized...</div>
                 <div class="text-[10px] text-blue-500 font-bold">Welcome to Dynamics Park! Connect a path to the Main Entrance to open the park.</div>
-                <div class="text-[10px] text-slate-500 mb-1">Move: <b>WASD</b>/arrows pan · <b>Q</b>/<b>E</b> rotate · scroll or <b>[</b> <b>]</b> zoom · <b>C</b> recentre · right-drag also pans · two fingers on touch.</div>
+                <div class="text-[10px] text-slate-500 mb-1"><b>Drag</b> the map to move · <b>Q</b>/<b>E</b> rotate · scroll to zoom · <b>WASD</b> pan · edge-scroll at the screen border. Pick a tool to build, <b>click it again</b> to stop. <b>Shift+drag</b> paints a run.</div>
             </div>
+        </div>
+
+        <!-- Camera controls — the mouse-only route to everything the
+             keyboard can do. Without these, panning and rotation are
+             discoverable only by reading the tip line. -->
+        <div id="cam-hud">
+            <button data-act="rotateLeft" title="Rotate left (Q)"><i class="fas fa-arrow-rotate-left"></i></button>
+            <span id="cam-facing" title="Which way the park is facing">N</span>
+            <button data-act="rotateRight" title="Rotate right (E)"><i class="fas fa-arrow-rotate-right"></i></button>
+            <span class="cam-sep"></span>
+            <button data-act="zoomOut" title="Zoom out ([)"><i class="fas fa-magnifying-glass-minus"></i></button>
+            <button data-act="zoomIn" title="Zoom in (])"><i class="fas fa-magnifying-glass-plus"></i></button>
+            <span class="cam-sep"></span>
+            <button data-act="recenterView" title="Recentre on the park (C)"><i class="fas fa-crosshairs"></i></button>
+            <button id="btn-edge" data-act="toggleEdgeScroll" title="Edge scrolling: push the pointer to the screen edge to pan"><i class="fas fa-arrows-up-down-left-right"></i></button>
         </div>
 
         <!-- Minimap -->

@@ -45,6 +45,7 @@ import {
     MIN_ZOOM, MAX_ZOOM,
 } from './render/navigation';
 import { drawGuestSprite } from './render/guestsprite';
+import { drawEntranceSprite } from './render/entrancesprite';
 import {
     drawBreakdownSmoke as drawBreakdownSmokeImpl, drawRainFX as drawRainFXImpl,
     drawTooltip as drawTooltipImpl, drawRideQueue as drawRideQueueImpl,
@@ -115,7 +116,11 @@ const ENTRANCE_Y = 7;                    // centre of the gate — never moves
 const ENTRANCE_TILES = [[0, 6], [0, 7], [0, 8]];
 function isEntranceTile(x, y) { return x === ENTRANCE_X && y >= ENTRANCE_Y - 1 && y <= ENTRANCE_Y + 1; }
 
-let currentTool = 'path';
+// null means NO tool armed -- look-and-pan mode, and the state a new park
+// starts in. The game used to boot straight into build mode with Path armed,
+// so the very first click on the map laid a path whether you meant it or not.
+// Clicking an armed tool again returns here (see setTool/clearTool).
+let currentTool = null;
 let gameSpeed = 1;       // 0 = paused, 1 = normal, 3 = fast
 
 // Camera
@@ -645,6 +650,10 @@ window.addEventListener('load', resize);
 // ────── UI Functions ──────
 
 function setTool(tool, btnElement) {
+    // Clicking the armed tool again disarms it -- the fastest way out of build
+    // mode is the button that got you into it, and it needs no extra UI.
+    if (tool === currentTool) { clearTool(); return; }
+    // Cursor advertises the armed tool: bulldozer gets its own.
     if (!isUnlocked(tool)) {
         const next = RESEARCH_ORDER.find(t => !S.research.unlocked.includes(t));
         logEvent(`${TYPE_LABEL[tool] || tool} isn't researched yet.${next ? ` R&D is working on ${TYPE_LABEL[next]}.` : ''}`, 'bad');
@@ -652,12 +661,24 @@ function setTool(tool, btnElement) {
         return;
     }
     currentTool = tool;
+    syncCursor();
     document.querySelectorAll('.build-btn').forEach(btn => btn.classList.remove('active'));
     if (btnElement) btnElement.classList.add('active');
     else {
         const b = document.querySelector<HTMLElement>(`.build-btn[data-act="setTool"][data-arg="${tool}"]`);
         if (b) b.classList.add('active');
     }
+}
+
+/** Disarm the current tool: no build preview, no accidental placement. */
+function clearTool() {
+    currentTool = null;
+    // The sentinel, NOT null: drawTooltip() destructures this every frame, and
+    // null took the whole render loop down.
+    hoveredCell = { x: -1, y: -1 };
+    document.querySelectorAll('.build-btn').forEach(btn => btn.classList.remove('active'));
+    syncCursor();
+    syncCamHud();
 }
 
 // formatTime/updateUI/logEvent moved to ui/statusbar.ts and ui/eventlog.ts
@@ -848,7 +869,12 @@ function drawPadFence(cx, cy, k, postColor, railColor) { drawPadFenceImpl(ctx, c
 // each, not per-cell). Every other scenery/ride/shop draw function's
 // main.ts wrapper is gone: now that render/sprites/index.ts's SPRITES table
 // imports them directly, the wrappers had no remaining caller.
-function drawEntrance(cx, cy) { drawEntranceImpl(ctx, cx, cy, ENTRANCE_X, ENTRANCE_Y); }
+function drawEntrance(cx, cy) {
+    // Baked gate turns with the map; the vector original is the pre-decode
+    // fallback, as with every other sprite.
+    if (drawEntranceSprite(ctx, cx, cy)) return;
+    drawEntranceImpl(ctx, cx, cy, ENTRANCE_X, ENTRANCE_Y);
+}
 function drawParkFence() { drawParkFenceImpl(ctx, S, ENTRANCE_Y); }
 
 // drawBreakdownSmoke/drawRainFX/drawTooltip/drawRideQueue moved to
@@ -1074,7 +1100,10 @@ function render() {
     for (const dr of drawables) dr.fn();
 
     // Hover highlight — drawn after objects so the target tile always reads
-    if (hoveredCell.x >= 0 && hoveredCell.y >= 0 && hoveredCell.x < S.gridSize && hoveredCell.y < S.gridSize) {
+    // `currentTool &&` -- with no tool armed there is nothing to preview, and
+    // this must SKIP THE BLOCK rather than return: everything after it (guests,
+    // the night tint, lamp pools, rain, fireworks) still has to draw.
+    if (currentTool && hoveredCell.x >= 0 && hoveredCell.y >= 0 && hoveredCell.x < S.gridSize && hoveredCell.y < S.gridSize) {
         const hx = hoveredCell.x, hy = hoveredCell.y;
         const hCell = S.map[hx][hy];
         const toolData = BUILD_DATA[currentTool];
@@ -1181,6 +1210,8 @@ function handleInteraction(e) {
 }
 
 function buildInCell(x, y) {
+    // No tool armed: look-and-pan mode, nothing to place.
+    if (!currentTool) return;
     const currentCell = S.map[x][y];
 
     // Protect Entrance
@@ -1304,6 +1335,60 @@ function buildInCell(x, y) {
 }
 
 
+// ── Edge scrolling ──
+// The classic tycoon mouse gesture: push the pointer to the edge of the map
+// and the view follows. It is the one way to pan continuously without holding
+// a modifier or a second button, which is what makes the game playable with a
+// mouse alone.
+//
+// Off by default would make it undiscoverable, on by default annoys people
+// reaching for the panels -- so it is on, but only inside a 28px band, only
+// while the pointer is genuinely over the canvas, and it is toggleable from
+// the camera HUD with the choice remembered.
+const EDGE_BAND = 28;
+const EDGE_SPEED = 850;          // screen px/sec at zoom 1, ~= the key pan rate
+let edgeScroll = localStorage.getItem('c2c_edge_scroll') !== '0';
+let pointerOnCanvas = false;
+let pointerX = 0, pointerY = 0;
+
+function toggleEdgeScroll() {
+    edgeScroll = !edgeScroll;
+    try { localStorage.setItem('c2c_edge_scroll', edgeScroll ? '1' : '0'); } catch (e) {}
+    syncCamHud();
+    logEvent(`Edge scrolling ${edgeScroll ? 'on' : 'off'}.`, 'info');
+}
+
+/** Screen-space pan from the pointer sitting in an edge band. */
+function edgeDelta(wallMs) {
+    if (!edgeScroll || !pointerOnCanvas || isPanning) return null;
+    const r = canvas.getBoundingClientRect();
+    let dx = 0, dy = 0;
+    if (pointerX - r.left < EDGE_BAND) dx = 1;
+    else if (r.right - pointerX < EDGE_BAND) dx = -1;
+    if (pointerY - r.top < EDGE_BAND) dy = 1;
+    else if (r.bottom - pointerY < EDGE_BAND) dy = -1;
+    if (!dx && !dy) return null;
+    const len = Math.hypot(dx, dy);
+    const v = (EDGE_SPEED * wallMs) / 1000 / Math.max(0.01, zoom);
+    return { dx: (dx / len) * v, dy: (dy / len) * v };
+}
+
+/** Cursor tells you what the mouse will do: grabbing while panning, crosshair
+ *  over the map when a build tool is armed. */
+function syncCursor() {
+    canvas.style.cursor = isPanning ? 'grabbing'
+        : !currentTool ? 'grab'
+        : currentTool === 'bulldozer' ? 'cell'
+        : 'crosshair';
+}
+
+function syncCamHud() {
+    const f = document.getElementById('cam-facing');
+    if (f) f.textContent = ['N', 'E', 'S', 'W'][rotation];
+    const b = document.getElementById('btn-edge');
+    if (b) b.classList.toggle('on', edgeScroll);
+}
+
 // ── Camera rotation ──
 // Spinning about the grid centre keeps the park on screen, but the point the
 // player was actually looking at still drifts, because pan is in screen space
@@ -1319,7 +1404,7 @@ function rotateView(delta) {
     // Where that tile now lands vs where we want it (viewport centre).
     panX += canvas.width / 2 - (after.x * zoom + o.x);
     panY += canvas.height / 2 - (after.y * zoom + o.y);
-    logEvent(`View rotated — facing ${['north', 'east', 'south', 'west'][rotation]}.`, 'info');
+    syncCamHud();
 }
 
 /** Frame the whole park, whatever its size and rotation. */
@@ -1331,11 +1416,24 @@ function recenterView() {
 }
 
 // Event Listeners — build, pan (drag/keys), zoom (wheel), rotate (Q/E)
+canvas.addEventListener('mouseenter', () => { pointerOnCanvas = true; });
+canvas.addEventListener('mouseleave', () => { pointerOnCanvas = false; });
 canvas.addEventListener('mousemove', (e) => {
+    pointerOnCanvas = true;
+    pointerX = e.clientX;
+    pointerY = e.clientY;
     if (isPanning) {
         panX += e.clientX - panStart.x;
         panY += e.clientY - panStart.y;
         panStart = { x: e.clientX, y: e.clientY };
+        return;
+    }
+    // A left press that has travelled far enough is a drag, not a click.
+    if (pendingClick && Math.hypot(e.clientX - pendingClick.x, e.clientY - pendingClick.y) > DRAG_SLOP) {
+        pendingClick = null;
+        isPanning = true;
+        panStart = { x: e.clientX, y: e.clientY };
+        syncCursor();
         return;
     }
     handleInteraction(e);
@@ -1364,13 +1462,49 @@ canvas.addEventListener('touchmove', (e) => {
     pinch = null;
     handleInteraction(e);
 }, {passive: false});
+/**
+ * Left mouse: CLICK acts, DRAG pans.
+ *
+ * Left-drag used to paint continuously, which meant the most natural gesture
+ * on the most-used button did the one thing you least expect on a map -- and
+ * left panning stranded behind a middle click, a right click or Shift, none of
+ * which anyone finds.
+ *
+ * So the action is deferred: mousedown records where you pressed and commits
+ * to nothing. Move past DRAG_SLOP and it becomes a pan; release inside it and
+ * it was a click, and the build/inspect runs then. The slop matters -- without
+ * it, the hand-tremor on a normal click registers as a one-pixel drag and the
+ * click is swallowed.
+ *
+ * Painting a run of path is still worth having, so it moved to Shift+drag.
+ * That is the button Shift+drag used to pan with, which is now redundant given
+ * plain left-drag does it.
+ */
+const DRAG_SLOP = 4;              // px of movement before a click becomes a drag
+let pendingClick = null;          // {x, y} of a left press not yet resolved
+
 canvas.addEventListener('mousedown', (e) => {
-    if (e.button === 1 || e.button === 2 || e.shiftKey) {
+    // Middle / right / Shift keep their old jobs: pan, pan, and paint.
+    if (e.button === 1 || e.button === 2) {
         isPanning = true;
         panStart = { x: e.clientX, y: e.clientY };
+        syncCursor();
         e.preventDefault();
         return;
     }
+    if (e.button !== 0) return;
+    if (e.shiftKey) {             // Shift+drag paints, as left-drag used to
+        isDragging = true;
+        handleInteraction(e);
+        return;
+    }
+    pendingClick = { x: e.clientX, y: e.clientY };
+    panStart = { x: e.clientX, y: e.clientY };
+    e.preventDefault();
+});
+
+/** Run what a left CLICK means at this screen point: inspect, or build. */
+function resolveClick(e) {
     const rect = canvas.getBoundingClientRect();
     const csx = (e.clientX - rect.left) * (canvas.width / rect.width);
     const csy = (e.clientY - rect.top) * (canvas.height / rect.height);
@@ -1388,9 +1522,14 @@ canvas.addEventListener('mousedown', (e) => {
             return;
         }
     }
-    isDragging = true;
+    // Build explicitly rather than via handleInteraction(): that only places
+    // on mousedown/touchstart/drag, and a click now RESOLVES ON MOUSEUP, so
+    // routing through it silently placed nothing.
     handleInteraction(e);
-});
+    if (gp.x >= 0 && gp.y >= 0 && gp.x < S.gridSize && gp.y < S.gridSize) {
+        buildInCell(gp.x, gp.y);
+    }
+}
 canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
@@ -1408,7 +1547,13 @@ canvas.addEventListener('touchstart', (e) => {
     isDragging = true;
     handleInteraction(e);
 });
-window.addEventListener('mouseup', () => { isDragging = false; isPanning = false; });
+window.addEventListener('mouseup', (e) => {
+    if (pendingClick && e.button === 0) { const p = pendingClick; pendingClick = null; void p; resolveClick(e); }
+    pendingClick = null;
+    isDragging = false;
+    isPanning = false;
+    syncCursor();
+});
 window.addEventListener('touchend', () => { isDragging = false; pinch = null; });
 
 // Ride name editing — commit as you type
@@ -1442,6 +1587,7 @@ window.addEventListener('keydown', (e) => {
         if (!document.getElementById('mgmt').classList.contains('hidden')) closeMgmt();
         else if (inspectedGuest) closeGuestPanel();
         else if (inspectedKey) closeRidePanel();
+        else if (currentTool) clearTool();
         return;
     }
     if (k >= '1' && k <= '9') { const t = HOTKEY_TOOLS[+k - 1]; if (t) setTool(t, null); return; }
@@ -1517,6 +1663,12 @@ const ACTIONS: Record<string, (arg: string, el: HTMLElement) => void> = {
     toggleMinimap,
     toggleSound,
     toggleTheme,
+    rotateLeft:         () => rotateView(-1),
+    rotateRight:        () => rotateView(1),
+    zoomIn:             () => { zoom = Math.min(MAX_ZOOM, zoom * 1.25); },
+    zoomOut:            () => { zoom = Math.max(MIN_ZOOM, zoom * 0.8); },
+    recenterView,
+    toggleEdgeScroll,
     toggleObjectives,
     closeGuestPanel,
     closeRidePanel,
@@ -1646,6 +1798,8 @@ function frame(now: number) {
     // while the game is paused.
     const nav = panDelta(wall, zoom);
     if (nav.dx || nav.dy) { panX += nav.dx; panY += nav.dy; }
+    const edge = edgeDelta(wall);
+    if (edge) { panX += edge.dx; panY += edge.dy; }
 
     const simMs = wall * gameSpeed;
     advanceSimClock(simMs);
@@ -1670,6 +1824,11 @@ function frame(now: number) {
     render();
     requestAnimationFrame(frame);
 }
+
+// Paint the camera HUD's initial state (compass letter, edge-scroll toggle)
+// and set the cursor for the armed tool before the first frame.
+syncCamHud();
+syncCursor();
 
 lastFrameAt = performance.now();
 requestAnimationFrame(frame);

@@ -68,11 +68,19 @@ async function margin(file) {
   return Math.min(minX, W - 1 - maxX, minY, H - 1 - maxY) / SS;
 }
 
-const ids = (await readdir(SRC_ROOT, { withFileTypes: true }))
+// EVERY rendered attraction, not just the ones being re-packed.
+//
+// The generated TS table describes the whole set, so it must be written from
+// the whole set: an earlier version filtered this list by `only`, and packing
+// a single sprite silently rewrote generated-strips.ts with ONE entry, which
+// took the game down at boot with "no packed strip for flowerbed". Re-encoding
+// is filtered below; describing is not.
+const allIds = (await readdir(SRC_ROOT, { withFileTypes: true }))
   .filter((d) => d.isDirectory() && existsSync(path.join(SRC_ROOT, d.name, 'meta.json')))
   .map((d) => d.name)
-  .filter((id) => !only.length || only.includes(id))
   .sort();
+const repack = new Set(only.length ? only : allIds);
+const ids = allIds;
 
 await mkdir(DEST_DIR, { recursive: true });
 
@@ -92,20 +100,25 @@ for (const id of ids) {
     throw new Error(`${id}: meta says ${expected} images (${meta.frames}f x ${meta.variants}v), found ${files.length}`);
   }
 
+  const dest = path.join(DEST_DIR, `${id}.png`);
+  const doPack = repack.has(id) || !existsSync(dest);
+
   let worst = Infinity;
   const tiles = [];
-  for (const f of files) {
-    const m = await margin(path.join(dir, f));
-    if (m < worst) worst = m;
-    const [, v, fr] = f.match(/^v(\d+)_f(\d+)\.png$/).map(Number);
-    tiles.push({
-      input: await sharp(path.join(dir, f)).resize(fw, fh, { kernel: 'lanczos3' }).png().toBuffer(),
-      left: fr * fw,
-      top: v * fh,
-    });
+  if (doPack) {
+    for (const f of files) {
+      const m = await margin(path.join(dir, f));
+      if (m < worst) worst = m;
+      const [, v, fr] = f.match(/^v(\d+)_f(\d+)\.png$/).map(Number);
+      tiles.push({
+        input: await sharp(path.join(dir, f)).resize(fw, fh, { kernel: 'lanczos3' }).png().toBuffer(),
+        left: fr * fw,
+        top: v * fh,
+      });
+    }
   }
 
-  if (worst < MIN_MARGIN_PX) {
+  if (doPack && worst < MIN_MARGIN_PX) {
     throw new Error(
       `${id}: artwork touches the frame edge (margin ${worst.toFixed(1)}px at 1x). ` +
       `Raise w/h for "${id}" in scripts/blender/attractions.py MANIFEST and re-render -- ` +
@@ -113,8 +126,8 @@ for (const id of ids) {
     );
   }
 
-  const dest = path.join(DEST_DIR, `${id}.png`);
-  await sharp({
+  if (doPack) {
+    await sharp({
     create: {
       width: fw * meta.frames,
       height: fh * meta.variants,
@@ -131,6 +144,7 @@ for (const id of ids) {
     // large flat gradients on the ferris wheel deck and the ride pads.
     .png({ compressionLevel: 9, palette: true, colors: 256, effort: 10 })
     .toFile(dest);
+  }
 
   const bytes = (await readFile(dest)).length;
   totalBytes += bytes;
@@ -138,7 +152,7 @@ for (const id of ids) {
   console.log(
     `${id.padEnd(14)} ${String(meta.frames).padStart(2)}f x ${meta.variants}v${(meta.rot || 1) > 1 ? ` (${meta.rot} angles)` : ''}  ` +
     `${String(W).padStart(3)}x${String(H).padStart(3)}  ` +
-    `margin ${worst === Infinity ? '-' : worst.toFixed(1) + 'px'}  ` +
+    `${doPack ? `margin ${worst === Infinity ? '-' : worst.toFixed(1) + 'px'}` : 'unchanged'}  ` +
     `${(bytes / 1024).toFixed(0)} KB`,
   );
 }

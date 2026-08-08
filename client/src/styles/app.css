@@ -169,6 +169,31 @@ h1, h2, h3 { font-family: 'Space Grotesk', sans-serif; }
 :where(.dark, .dark *) .m-chip.got { color: #4ade80; }
 .m-chip .sp { margin-left: auto; }
 
+/* Camera control cluster.
+   Bottom-centre and BELOW .side-panel's z-index: the inspectors are
+   transient and deserve to win a collision, this is always-on furniture. */
+#cam-hud {
+    position: absolute; bottom: 1rem; left: 50%; transform: translateX(-50%);
+    display: flex; align-items: center; gap: 0.125rem; z-index: 15;
+    padding: 0.25rem; border-radius: 0.75rem;
+    background: rgba(255,255,255,0.72); backdrop-filter: blur(12px);
+    box-shadow: 0 10px 30px -12px rgba(0,0,0,0.45);
+}
+:where(.dark, .dark *) #cam-hud { background: rgba(15,23,42,0.72); }
+#cam-hud button {
+    width: 2rem; height: 2rem; border-radius: 0.5rem; font-size: 0.75rem;
+    color: #475569; transition: background 0.15s, color 0.15s;
+}
+:where(.dark, .dark *) #cam-hud button { color: #cbd5e1; }
+#cam-hud button:hover { background: rgba(0,0,0,0.06); }
+:where(.dark, .dark *) #cam-hud button:hover { background: rgba(255,255,255,0.12); }
+#cam-hud button.on { background: rgba(59,130,246,0.16); color: #3b82f6; }
+#cam-facing {
+    min-width: 1.5rem; text-align: center; font-size: 11px; font-weight: 700;
+    letter-spacing: 0.08em; color: #3b82f6;
+}
+.cam-sep { width: 1px; height: 1.25rem; background: rgba(100,116,139,0.3); margin: 0 0.25rem; }
+
 /* Floating side panels (ride inspector, guest inspector, minimap) */
 .side-panel { position: absolute; border-radius: 1rem; overflow: hidden; z-index: 20; box-shadow: 0 20px 40px -12px rgba(0,0,0,0.5); }
 .side-panel.hidden { display: none; }

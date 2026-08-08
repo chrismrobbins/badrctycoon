@@ -68,10 +68,19 @@ test('delegation drives the static build palette', async ({ page }) => {
   const path = page.locator('.build-btn[data-act="setTool"][data-arg="path"]');
   const tree = page.locator('.build-btn[data-act="setTool"][data-arg="tree"]');
 
-  await expect(path).toHaveClass(/active/); // default tool
+  // A new park boots with NO tool armed -- look-and-pan mode -- so the first
+  // click on the map can't lay a path you didn't ask for.
+  await expect(path).not.toHaveClass(/active/);
+
+  await path.click();
+  await expect(path).toHaveClass(/active/);
   await tree.click();
   await expect(tree).toHaveClass(/active/);
   await expect(path).not.toHaveClass(/active/);
+
+  // Clicking the armed tool again disarms it: the way back out of build mode.
+  await tree.click();
+  await expect(tree).not.toHaveClass(/active/);
 
   expect(errors).toEqual([]);
 });

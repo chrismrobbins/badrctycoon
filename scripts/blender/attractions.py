@@ -1296,6 +1296,76 @@ def build_staff(variant):
     return drive
 
 
+
+# ==================================================================
+# PARK ENTRANCE
+# ==================================================================
+
+def build_entrance(variant):
+    """The main gate: two ticket kiosks flanking an arch, banner over the top.
+
+    Baked for the same reason as everything else, but it matters more than most:
+    in a fresh park the grass and the perimeter fence are perfectly symmetric,
+    so the gate is the ONLY thing on screen that shows which way the park is
+    facing. Left as flat vector art it slid to a different corner on each
+    rotation without ever turning, which made the whole rotate feature read as
+    "the map moved" rather than "the map turned".
+
+    Authored along +Y to match drawEntrance()'s three-tile span.
+    """
+    L = uv(3)
+    bm = bmesh.new()
+    box(bm, 0.62, 2.0, L, (0, 0, L / 2))
+    obj("Plaza", bm, [mat("en_plaza", "#e2e8f0", 0.9)])
+
+    # Ticket kiosks either side of the gap.
+    for sy in (-1, 1):
+        k = bmesh.new()
+        box(k, uh(22), uh(20), uv(22), (0, sy * uh(30), L + uv(11)))
+        box(k, uh(25), uh(23), uv(3), (0, sy * uh(30), L + uv(23)))       # roof lip
+        cone(k, uh(17), uv(11), (0, sy * uh(30), L + uv(28)), segments=4)  # pitched roof
+        obj("Kiosk%d" % sy, k, [mat("en_kiosk", "#b91c1c", 0.7)])
+
+        w = bmesh.new()
+        box(w, uh(23), uh(11), uv(9), (uh(1), sy * uh(30) - uh(10) * sy, L + uv(13)))
+        obj("Window%d" % sy, w, [mat("en_glass", "#fef3c7", 0.35)])
+
+        sgn = bmesh.new()
+        box(sgn, uh(16), uh(2), uv(5), (uh(11), sy * uh(30), L + uv(8)))
+        obj("Ticket%d" % sy, sgn, [mat("en_ticket", "#fbbf24", 0.5)])
+
+    # Arch over the gap, plus the park banner.
+    arch = bmesh.new()
+    for sy in (-1, 1):
+        cyl(arch, uh(3.4), uv(34), (0, sy * uh(15), L + uv(17)), segments=8)
+    N = 12
+    for i in range(N):
+        a0 = math.pi * i / N
+        a1 = math.pi * (i + 1) / N
+        p0 = (0, math.cos(a0) * uh(15), L + uv(34) + math.sin(a0) * uv(13))
+        p1 = (0, math.cos(a1) * uh(15), L + uv(34) + math.sin(a1) * uv(13))
+        tube(arch, p0, p1, uh(3.0), segments=6)
+    obj("Arch", arch, [mat("en_arch", "#dc2626", 0.6)])
+
+    banner = bmesh.new()
+    box(banner, uh(3), uh(34), uv(12), (0, 0, L + uv(44)))
+    obj("Banner", banner, [mat("en_banner", "#facc15", 0.5)])
+    stripe = bmesh.new()
+    box(stripe, uh(3.4), uh(30), uv(3), (0, 0, L + uv(44)))
+    obj("BannerText", stripe, [mat("en_text", "#7c2d12", 0.6)])
+
+    # Flag poles -- a tall vertical accent reads as "entrance" from far out.
+    flags = bmesh.new()
+    for sy in (-1, 1):
+        cyl(flags, uh(1.4), uv(30), (0, sy * uh(40), L + uv(15)), segments=6)
+    obj("Poles", flags, [mat("en_pole", "#94a3b8", 0.4, metal=0.6)])
+    fl = bmesh.new()
+    for sy in (-1, 1):
+        box(fl, uh(1.5), uh(11), uv(7), (0, sy * uh(45), L + uv(27)))
+    obj("Flags", fl, [mat("en_flag", "#3b82f6", 0.5)])
+    return None
+
+
 # ==================================================================
 # MANIFEST
 # ==================================================================
@@ -1304,6 +1374,8 @@ def build_staff(variant):
 # plus the pad's lower half, or the render clips with no warning.
 
 MANIFEST = [
+    # the main gate -- spans three tiles along y, drawn by main.ts not SPRITES
+    dict(id="entrance",     tiles=1, rot=4, w=176, h=176, frames=1, variants=1, build=build_entrance),
     # scenery -- 1x1
     dict(id="tree",         tiles=1, w=96,  h=128, frames=8,  variants=3, build=build_tree),
     dict(id="bench",        tiles=1, rot=4, w=96,  h=96,  frames=1,  variants=2, build=build_bench),

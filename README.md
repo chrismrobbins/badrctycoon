@@ -16,11 +16,15 @@ npm test           # Playwright smoke suite
 
 | | |
 |---|---|
+| **Left-drag** | Move the map. Click without dragging to build or inspect |
+| **Shift+drag** | Paint a run of the armed tool (what left-drag used to do) |
+| Click the armed tool again | Leave build mode. A new park starts with no tool armed |
+| Screen edge | Edge-scroll (toggle in the camera HUD, remembered) |
 | **WASD** / arrows | Pan (hold — speed scales with zoom) |
 | **Q** / **E** | Rotate the park a quarter turn |
 | Scroll, **[** / **]** | Zoom (0.28×–3.2×) |
 | **C** | Recentre on the park |
-| Right-drag, middle-drag, Shift+drag | Pan with the mouse |
+| Right-drag, middle-drag | Also pan |
 | Two fingers | Pan and pinch-zoom on touch |
 | **1–9**, **B** | Tools / bulldozer · **M** management · **N** minimap · **Space** pause |
 
